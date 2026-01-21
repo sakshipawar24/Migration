@@ -37,7 +37,4 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# PBIX files (binary, large)
-*.pbix
-
 # Keep only necessary files
