@@ -1,0 +1,155 @@
+table request_steps
+	lineageTag: e23c3812-e84c-47cc-8955-db1b937f98f0
+
+	column request_id
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: 207a454b-1f43-4177-8504-713b1375795e
+		summarizeBy: none
+		sourceColumn: request_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column step_index
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: 3476d9e1-4503-4e4c-a39b-a8d96e602ce6
+		summarizeBy: sum
+		sourceColumn: step_index
+
+		annotation SummarizationSetBy = Automatic
+
+	column plan_node_id
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: 362b96d1-45e2-484b-a296-80d10cff0515
+		summarizeBy: sum
+		sourceColumn: plan_node_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column operation_type
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: 4fec0774-a5dd-4fee-9dfd-fa58ef3bfb87
+		summarizeBy: none
+		sourceColumn: operation_type
+
+		annotation SummarizationSetBy = Automatic
+
+	column distribution_type
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: ee20c6e3-0080-4756-bdbc-9951d7c1eeea
+		summarizeBy: none
+		sourceColumn: distribution_type
+
+		annotation SummarizationSetBy = Automatic
+
+	column location_type
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: 4826ba70-0bb9-4466-9fb0-012dc469aec0
+		summarizeBy: none
+		sourceColumn: location_type
+
+		annotation SummarizationSetBy = Automatic
+
+	column status
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: c2183f10-2c8c-4e65-95cd-5c9af126ff57
+		summarizeBy: none
+		sourceColumn: status
+
+		annotation SummarizationSetBy = Automatic
+
+	column error_id
+		dataType: string
+		sourceProviderType: nvarchar(36)
+		lineageTag: e254063f-d06a-4bc2-8a6c-7dd2256c4183
+		summarizeBy: none
+		sourceColumn: error_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column start_time
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime
+		lineageTag: 22608dfa-4a6a-4765-93ac-95441f29899f
+		summarizeBy: none
+		sourceColumn: start_time
+
+		annotation SummarizationSetBy = Automatic
+
+	column end_time
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime
+		lineageTag: da07a926-c81e-495e-a6e3-824657d1cc3c
+		summarizeBy: none
+		sourceColumn: end_time
+
+		annotation SummarizationSetBy = Automatic
+
+	column total_elapsed_time
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: 1b6a765f-1284-4ef4-bafc-950b036934fc
+		summarizeBy: sum
+		sourceColumn: total_elapsed_time
+
+		annotation SummarizationSetBy = Automatic
+
+	column row_count
+		dataType: int64
+		formatString: 0
+		sourceProviderType: bigint
+		lineageTag: b17b6ee6-5f9e-4479-9419-5aa588c67960
+		summarizeBy: sum
+		sourceColumn: row_count
+
+		annotation SummarizationSetBy = Automatic
+
+	column estimated_rows
+		dataType: int64
+		formatString: 0
+		sourceProviderType: bigint
+		lineageTag: 71cf58b4-4167-46f6-a6ec-1ca0c321f0b5
+		summarizeBy: sum
+		sourceColumn: estimated_rows
+
+		annotation SummarizationSetBy = Automatic
+
+	column command
+		dataType: string
+		sourceProviderType: nvarchar(4000)
+		lineageTag: 02cde939-9562-4d49-8def-25a72fc381e1
+		summarizeBy: none
+		sourceColumn: command
+
+		annotation SummarizationSetBy = Automatic
+
+	partition request_steps-4b0e912f-7d12-40d6-9caa-607c0a784b9e = m
+		mode: directQuery
+		source =
+				let
+				    
+Source = Lakehouse.Contents(
+    "https://api.fabric.microsoft.com",
+    [
+        WorkspaceId = "dummy_workspace_id",
+        LakehouseId = "dummy_lakehouse_id"
+    ]
+)
+
+
+in
+				    Source
+
+	annotation PBI_ResultType = Table
+

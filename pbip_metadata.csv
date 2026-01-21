@@ -1,0 +1,15 @@
+Type,Name,Before,After,Before_Source,Before_Conn,After_Source,After_Conn,Notes,File_Name,Connection_Type,Server,Database_Name,Connection_String,M_Query_Preview
+Table,All Suspended,DirectQuery,Import,SQL Server,Sql.Database,Databricks,Databricks Cluster,Partition source,tables/All Suspended.tmdl,SQL Server,From M Query,From M Query,Sql.Database,"let
+				    Source = Sql.Database(""dummy_server"", ""dummy_database"", [Query=""select dummy_schema.dummy_table,((total_elapsed_time%(1000*60*60))%(1000*60))/1000 as wait_sec,dummy_schema.dummy_table,dumm"
+Table,All_Running,DirectQuery,Import,SQL Server,Sql.Database,Databricks,Databricks Cluster,Partition source,tables/All_Running.tmdl,SQL Server,From M Query,From M Query,Sql.Database,"let
+				    Source = Sql.Database(""dummy_server"", ""dummy_database"", [Query=""SELECT #(lf)    login_name,#(lf)    dummy_schema.dummy_table,#(lf)    total_elapsed_time / (1000 * 60) AS Minutes,#(lf)    r"
+Table,All_Running_2,DirectQuery,Import,SQL Server,Sql.Database,Databricks,Databricks Cluster,Partition source,tables/All_Running_2.tmdl,SQL Server,From M Query,From M Query,Sql.Database,"let
+				    Source = Sql.Database(""dummy_server"", ""dummy_database"", [Query=""select login_name,dummy_schema.dummy_table,(total_elapsed_time%(1000*60*60))/(1000*60)as Minutes,resource_class,importance,g"
+Table,OpenSessions,DirectQuery,Import,SQL Server,Sql.Database,Databricks,Databricks Cluster,Partition source,tables/OpenSessions.tmdl,SQL Server,From M Query,From M Query,Sql.Database,"let
+				    Source = Sql.Database(""dummy_server"", ""dummy_database"", [Query=""select  * from dummy_schema.dummy_table where status in ('Idle','Active')#(lf)""])
+				in
+				    Source"
+Table,request_steps,DirectQuery,Import,SQL Server,Sql.Database,Databricks,Databricks Cluster,Partition source,tables/request_steps.tmdl,SQL Server,From M Query,From M Query,Sql.Database,"let
+				    Source = Sql.Database(""dummy_server"", ""dummy_database"", [Query="" SELECT * FROM dummy_schema.dummy_table "", CreateNavigationProperties=false])
+				in
+				    Source"

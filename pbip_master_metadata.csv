@@ -1,0 +1,62 @@
+Type,Name,Before,After,Before_Source,Before_Conn,After_Source,After_Conn,Notes,File_Name,Connection_Type,Server,Database_Name,Connection_String,M_Query_Preview
+Table,All Suspended,DirectQuery,DirectQuery,Fabric Lakehouse,Lakehouse.Contents,Microsoft Fabric,Fabric Lakehouse,Partition source,tables/All Suspended.tmdl,Lakehouse.Contents,dummy_server,dummy_database,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+inner join dumm"
+Table,All_Running,DirectQuery,DirectQuery,Fabric Lakehouse,Lakehouse.Contents,Microsoft Fabric,Fabric Lakehouse,Partition source,tables/All_Running.tmdl,Lakehouse.Contents,dummy_server,dummy_database,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+in_name,#(lf)  "
+Table,All_Running_2,DirectQuery,DirectQuery,Fabric Lakehouse,Lakehouse.Contents,Microsoft Fabric,Fabric Lakehouse,Partition source,tables/All_Running_2.tmdl,Lakehouse.Contents,dummy_server,dummy_database,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+in_name,dummy_s"
+Table,OpenSessions,DirectQuery,DirectQuery,Fabric Lakehouse,Lakehouse.Contents,Microsoft Fabric,Fabric Lakehouse,Partition source,tables/OpenSessions.tmdl,Lakehouse.Contents,dummy_server,dummy_database,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+in ('Idle','Act"
+Table,request_steps,DirectQuery,DirectQuery,Fabric Lakehouse,Lakehouse.Contents,Microsoft Fabric,Fabric Lakehouse,Partition source,tables/request_steps.tmdl,Lakehouse.Contents,dummy_server,dummy_database,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+in
+				    Sour"

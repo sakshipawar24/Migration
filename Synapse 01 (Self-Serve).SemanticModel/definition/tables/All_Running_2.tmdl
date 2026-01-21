@@ -1,0 +1,119 @@
+table All_Running_2
+	lineageTag: df4ffc7c-27fc-4937-be1d-84b75f339a4f
+
+	column login_name
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: fff258dd-1a97-4c44-86d0-e360de2f1e13
+		summarizeBy: none
+		sourceColumn: login_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column request_id
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: b641f87a-d85e-48cb-885d-dfee9e9088eb
+		summarizeBy: none
+		sourceColumn: request_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column Minutes
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: bebcc939-4b5d-47e7-a8ea-c590646c5fbf
+		summarizeBy: none
+		sourceColumn: Minutes
+
+		annotation SummarizationSetBy = Automatic
+
+	column resource_class
+		dataType: string
+		sourceProviderType: nvarchar(20)
+		lineageTag: cee42390-218a-4c37-bbfd-ecb1e246b32a
+		summarizeBy: none
+		sourceColumn: resource_class
+
+		annotation SummarizationSetBy = Automatic
+
+	column importance
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: 58773858-5f55-4909-a70c-112e0ce312d8
+		summarizeBy: none
+		sourceColumn: importance
+
+		annotation SummarizationSetBy = Automatic
+
+	column group_name
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: 296c40e3-a365-4029-80af-c3cf7dd62959
+		summarizeBy: none
+		sourceColumn: group_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column resource_allocation_percentage
+		dataType: double
+		sourceProviderType: decimal(5, 2)
+		lineageTag: a5a99dc4-0493-4ea6-bd3d-091528a707ad
+		summarizeBy: none
+		sourceColumn: resource_allocation_percentage
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column result_cache_hit
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: 6c422212-c196-450f-b532-7d17aca303d7
+		summarizeBy: none
+		sourceColumn: result_cache_hit
+
+		annotation SummarizationSetBy = Automatic
+
+	column app_name
+		dataType: string
+		sourceProviderType: nvarchar(255)
+		lineageTag: 22815de6-2ff4-443d-a902-226b10a6dd32
+		summarizeBy: none
+		sourceColumn: app_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column command
+		dataType: string
+		sourceProviderType: nvarchar(4000)
+		lineageTag: 42c348ce-30fe-4250-8aa0-d29a7b127d82
+		summarizeBy: none
+		sourceColumn: command
+
+		annotation SummarizationSetBy = Automatic
+
+	partition All_Running_2-5df7486c-44f1-47f3-84ff-b535e955737f = m
+		mode: directQuery
+		source =
+				let
+				    
+Source = Lakehouse.Contents(
+    "https://api.fabric.microsoft.com",
+    [
+        WorkspaceId = "dummy_workspace_id",
+        LakehouseId = "dummy_lakehouse_id"
+    ]
+)
+
+
+in_name,dummy_schema.dummy_table,(total_elapsed_time%(1000*60*60))/(1000*60)as Minutes,resource_class,importance,group_name,resource_allocation_percentage,result_cache_hit,app_name,#(lf)case when command2 is null then command#(lf)else command2 end command#(lf) #(lf)from dummy_schema.dummy_table a#(lf) #(lf)inner join dummy_schema.dummy_table  b#(lf) #(lf)on dummy_schema.dummy_table=dummy_schema.dummy_table#(lf) #(lf)where dummy_schema.dummy_table in ('running')#(lf) #(lf)and dummy_schema.dummy_table is not null#(lf) ", CreateNavigationProperties=false])
+				in
+				    Source
+
+	annotation PBI_ResultType = Table
+
+	annotation PBI_NavigationStepName = Navigation
+
