@@ -2,6 +2,8 @@
 
 Web application to display and analyze Power BI Project (PBIP) metadata with React UI.
 
+![PBIP Metadata Viewer](screenshots/app-screenshot.png)
+
 ## Features
 
 - Interactive data table with search and filtering
