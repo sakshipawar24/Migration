@@ -1,10 +1,16 @@
 const { exec } = require("child_process");
+const fs = require("fs");
 
-function runPython(scriptName) {
+function runPython(scriptName, args = []) {
   return new Promise((resolve, reject) => {
-    console.log(`Running ${scriptName}...`);
+    // Quote arguments that contain spaces
+    const quotedArgs = args.map(arg => arg.includes(' ') ? `"${arg}"` : arg);
+    const argString = quotedArgs.join(' ');
+    const command = argString ? `python ${scriptName} ${argString}` : `python ${scriptName}`;
+    
+    console.log(`Running: ${command}`);
 
-    exec(`python ${scriptName}`, (error, stdout, stderr) => {
+    exec(command, (error, stdout, stderr) => {
       if (error) {
         console.error(`Error in ${scriptName}`);
         console.error(stderr);
@@ -19,15 +25,31 @@ function runPython(scriptName) {
 
 async function runPipeline() {
   try {
-    // Step 1: Sanitize PBIP files
+    let params = {};
+    
+    // Load parameters if they exist
+    if (fs.existsSync('temp_params.json')) {
+      params = JSON.parse(fs.readFileSync('temp_params.json', 'utf8'));
+      console.log("Loaded parameters:", params);
+    }
+
+    const pbipPath = params.pbip_path || "Synapse 01 (Self-Serve).SemanticModel";
+
+    console.log("\n=== Step 1: Dummy Replacement ===");
     await runPython("dummyreplacement.py");
 
-    // Step 2: Extract metadata to CSV
-    await runPython("metadatacollection.py");
+    // Step 2: Migrate to Fabric (Databricks → Fabric Lakehouse)
+    console.log("\n=== Step 2: Technology Migration ===");
+    await runPython("changetech.py");
 
-    console.log("PIPELINE COMPLETED SUCCESSFULLY");
+    // Step 3: Extract AFTER metadata
+    console.log("\n=== Step 3: Extract AFTER Metadata ===");
+    await runPython("metadatacollection.py", [pbipPath, "after"]);
+
+    console.log("\n[OK] PIPELINE COMPLETED SUCCESSFULLY");
   } catch (err) {
-    console.error("PIPELINE FAILED");
+    console.error("\n[ERROR] PIPELINE FAILED");
+    process.exit(1);
   }
 }
 

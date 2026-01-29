@@ -1,0 +1,92 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.0.0/schema.json",
+  "name": "ReportSection",
+  "displayName": "Home",
+  "displayOption": "FitToPage",
+  "height": 720,
+  "width": 1280,
+  "pageBinding": {
+    "name": "Pod",
+    "type": "Default",
+    "parameters": [],
+    "acceptsFilterContext": "None"
+  },
+  "objects": {
+    "pageRefresh": [
+      {
+        "properties": {
+          "show": {
+            "expr": {
+              "Literal": {
+                "Value": "false"
+              }
+            }
+          },
+          "duration": {
+            "expr": {
+              "Literal": {
+                "Value": "'PT1M'"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "background": [
+      {
+        "properties": {
+          "color": {
+            "solid": {
+              "color": {
+                "expr": {
+                  "Literal": {
+                    "Value": "'#CCCCCC'"
+                  }
+                }
+              }
+            }
+          },
+          "transparency": {
+            "expr": {
+              "Literal": {
+                "Value": "76D"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "visualInteractions": [
+    {
+      "source": "0e0c80a94a5d21033b25",
+      "target": "75c7b4d77b020837424c",
+      "type": "NoFilter"
+    },
+    {
+      "source": "0e0c80a94a5d21033b25",
+      "target": "d63f66182609cc370d0b",
+      "type": "NoFilter"
+    },
+    {
+      "source": "0e0c80a94a5d21033b25",
+      "target": "4e25ad7e9975248edd5c",
+      "type": "NoFilter"
+    },
+    {
+      "source": "0e0c80a94a5d21033b25",
+      "target": "6e618f4b613df529384d",
+      "type": "DataFilter"
+    },
+    {
+      "source": "0e0c80a94a5d21033b25",
+      "target": "75d4abcce145eb0868f8",
+      "type": "DataFilter"
+    },
+    {
+      "source": "0e0c80a94a5d21033b25",
+      "target": "9e04d5b0e2787c4cdb0d",
+      "type": "NoFilter"
+    }
+  ]
+}

@@ -1,10 +1,24 @@
 import re
 from pathlib import Path
+import sys
+import json
 
-BASE_DIR = Path("Synapse 01 (Self-Serve).SemanticModel/definition/tables")
+def get_params():
+    """Load parameters from temp file or use defaults"""
+    if Path('temp_params.json').exists():
+        with open('temp_params.json', 'r') as f:
+            return json.load(f)
+    return {
+        'pbip_path': "Synapse 01 (Self-Serve).SemanticModel",
+        'server': 'dummy_server',
+        'database': 'dummy_database'
+    }
 
-DUMMY_SERVER = "dummy_server"
-DUMMY_DATABASE = "dummy_database"
+params = get_params()
+BASE_DIR = Path(params['pbip_path']) / "definition/tables"
+
+DUMMY_SERVER = params.get('server', 'dummy_server')
+DUMMY_DATABASE = params.get('database', 'dummy_database')
 DUMMY_SCHEMA = "dummy_schema"
 DUMMY_TABLE = "dummy_table"
 

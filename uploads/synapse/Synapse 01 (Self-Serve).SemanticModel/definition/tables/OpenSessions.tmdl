@@ -1,0 +1,117 @@
+table OpenSessions
+	lineageTag: 50ef08f7-0ae1-48d7-89b9-052a8552af56
+
+	column session_id
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: cfc5c884-5dd9-4b9b-b9d9-75470f948eb3
+		summarizeBy: none
+		sourceColumn: session_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column status
+		dataType: string
+		sourceProviderType: nvarchar(10)
+		lineageTag: bdaf8669-af03-47ba-ac1f-0101c84f4059
+		summarizeBy: none
+		sourceColumn: status
+
+		annotation SummarizationSetBy = Automatic
+
+	column request_id
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: 7a6b0cde-397d-4cc7-8621-2e1bb85ef6e8
+		summarizeBy: none
+		sourceColumn: request_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column login_name
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: eb953cae-8139-4ac0-a902-eac6246321f3
+		summarizeBy: none
+		sourceColumn: login_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column login_time
+		dataType: dateTime
+		formatString: General Date
+		sourceProviderType: datetime
+		lineageTag: e1927bc6-8015-4c37-bb6f-123aac7628b6
+		summarizeBy: none
+		sourceColumn: login_time
+
+		annotation SummarizationSetBy = Automatic
+
+	column query_count
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: bac880e5-cbe1-4114-ae27-b452cf152d6b
+		summarizeBy: sum
+		sourceColumn: query_count
+
+		annotation SummarizationSetBy = Automatic
+
+	column is_transactional
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		sourceProviderType: bit
+		lineageTag: 690e6bb2-b59e-4de5-9de9-0956c341beb8
+		summarizeBy: none
+		sourceColumn: is_transactional
+
+		annotation SummarizationSetBy = Automatic
+
+	column client_id
+		dataType: string
+		sourceProviderType: nvarchar(255)
+		lineageTag: 44574657-c5e6-44eb-bb1d-df15fdeb2195
+		summarizeBy: none
+		sourceColumn: client_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column app_name
+		dataType: string
+		sourceProviderType: nvarchar(255)
+		lineageTag: 41b66732-e2a4-4a21-a161-8839383642fe
+		summarizeBy: none
+		sourceColumn: app_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column sql_spid
+		dataType: int64
+		formatString: 0
+		sourceProviderType: smallint
+		lineageTag: b8c866b3-f5d1-486b-bd16-5862733e7458
+		summarizeBy: sum
+		sourceColumn: sql_spid
+
+		annotation SummarizationSetBy = Automatic
+
+	partition OpenSessions-bc256e19-dc5d-4812-ad85-ff9d8131c01d = m
+		mode: directQuery
+		source =
+				let
+				    
+Source = Lakehouse.Contents(
+    "https://api.fabric.microsoft.com",
+    [
+        WorkspaceId = "dummy_workspace_id",
+        LakehouseId = "dummy_lakehouse_id"
+    ]
+)
+
+
+in ('Idle','Active')#(lf)"])
+				in
+				    Source
+
+	annotation PBI_ResultType = Table
+

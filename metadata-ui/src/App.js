@@ -1,128 +1,139 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import React, { useState } from 'react';
 import './App.css';
+import FileUpload from './components/FileUpload';
+import ProcessButtons from './components/ProcessButtons';
 import MetadataTable from './components/MetadataTable';
 import StatsCards from './components/StatsCards';
-import Controls from './components/Controls';
 
 function App() {
-  const [metadata, setMetadata] = useState([]);
-  const [filteredData, setFilteredData] = useState([]);
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterType, setFilterType] = useState('all');
+  // Upload state
+  const [pbipPath, setPbipPath] = useState(null);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [targetSystem, setTargetSystem] = useState('');
+  
+  // Metadata state
+  const [beforeMetadata, setBeforeMetadata] = useState([]);
+  const [afterMetadata, setAfterMetadata] = useState([]);
+  
+  // UI state
+  const [uploadSuccess, setUploadSuccess] = useState(false);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const handleUploadSuccess = (data) => {
+    setPbipPath(data.pbip_path);
+    setWorkspaceName(data.workspace_name);
+    setTargetSystem(data.target_system);
+    setUploadSuccess(true);
+    
+    // Reset metadata on new upload
+    setBeforeMetadata([]);
+    setAfterMetadata([]);
+  };
 
-  useEffect(() => {
-    filterData();
-  }, [metadata, searchTerm, filterType]);
+  const handleBeforeMetadata = (metadata) => {
+    setBeforeMetadata(metadata);
+  };
 
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
+  const handleAfterMetadata = (metadata) => {
+    setAfterMetadata(metadata);
+  };
+
+  const calculateStats = (metadata) => {
+    const connectionTypes = {};
+    const sources = {};
+    
+    metadata.forEach(row => {
+      const connType = row.Connection_Type || 'Unknown';
+      connectionTypes[connType] = (connectionTypes[connType] || 0) + 1;
       
-      const [metadataResponse, statsResponse] = await Promise.all([
-        axios.get('/api/metadata'),
-        axios.get('/api/stats')
-      ]);
-
-      if (metadataResponse.data.success) {
-        setMetadata(metadataResponse.data.data);
-      } else {
-        setError('Failed to load metadata');
-      }
-
-      if (statsResponse.data.success) {
-        setStats(statsResponse.data.stats);
-      }
-
-      setLoading(false);
-    } catch (err) {
-      console.error('Error fetching data:', err);
-      setError('Error connecting to server. Make sure the backend is running on port 5000.');
-      setLoading(false);
-    }
+      const source = row.Before_Source || row.After_Source || 'Unknown';
+      sources[source] = (sources[source] || 0) + 1;
+    });
+    
+    return {
+      total_tables: metadata.length,
+      connection_types: connectionTypes,
+      sources: sources
+    };
   };
-
-  const filterData = () => {
-    let filtered = [...metadata];
-
-    // Apply search filter
-    if (searchTerm) {
-      filtered = filtered.filter(item => 
-        Object.values(item).some(val => 
-          String(val).toLowerCase().includes(searchTerm.toLowerCase())
-        )
-      );
-    }
-
-    // Apply type filter
-    if (filterType !== 'all') {
-      filtered = filtered.filter(item => 
-        item.Connection_Type === filterType
-      );
-    }
-
-    setFilteredData(filtered);
-  };
-
-  const getUniqueConnectionTypes = () => {
-    const types = new Set(metadata.map(item => item.Connection_Type));
-    return Array.from(types).filter(Boolean);
-  };
-
-  if (loading) {
-    return (
-      <div className="App">
-        <div className="loading">
-          <div>⏳ Loading metadata...</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="App">
-        <div className="header">
-          <h1>🔍 PBIP Metadata Viewer</h1>
-          <p>Power BI Project Metadata Analysis Tool</p>
-        </div>
-        <div className="error">
-          <h3>❌ Error</h3>
-          <p>{error}</p>
-          <button onClick={fetchData} className="view-btn">
-            🔄 Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="App">
       <div className="header">
-        <h1>🔍 PBIP Metadata Viewer</h1>
-        <p>Power BI Project Metadata Analysis Tool</p>
+        <h1>PBIP Converter & Metadata Viewer</h1>
+        <p>UI-Driven Power BI Project Processing</p>
       </div>
 
-      <StatsCards stats={stats} totalRecords={filteredData.length} />
+      {/* File Upload Section */}
+      <FileUpload onUploadSuccess={handleUploadSuccess} />
 
-      <Controls
-        searchTerm={searchTerm}
-        setSearchTerm={setSearchTerm}
-        filterType={filterType}
-        setFilterType={setFilterType}
-        connectionTypes={getUniqueConnectionTypes()}
-      />
+      {/* Show project info after upload */}
+      {uploadSuccess && (
+        <div className="project-info">
+          <h3>Project Loaded</h3>
+          <p><strong>Workspace:</strong> {workspaceName}</p>
+          <p><strong>Target:</strong> {targetSystem}</p>
+          <p><strong>Path:</strong> {pbipPath}</p>
+        </div>
+      )}
 
-      <MetadataTable data={filteredData} />
+      {/* Process Buttons */}
+      {uploadSuccess && (
+        <ProcessButtons
+          pbipPath={pbipPath}
+          workspaceName={workspaceName}
+          targetSystem={targetSystem}
+          onBeforeMetadata={handleBeforeMetadata}
+          onAfterMetadata={handleAfterMetadata}
+        />
+      )}
+
+      {/* BEFORE Metadata Display */}
+      {beforeMetadata.length > 0 && (
+        <div className="metadata-section before-section">
+          <div className="section-header">
+            <h2>BEFORE Metadata</h2>
+            <span className="badge">{beforeMetadata.length} tables</span>
+          </div>
+          
+          <StatsCards 
+            stats={calculateStats(beforeMetadata)} 
+            totalRecords={beforeMetadata.length} 
+          />
+          
+          <MetadataTable data={beforeMetadata} type="before" />
+        </div>
+      )}
+
+      {/* AFTER Metadata Display */}
+      {afterMetadata.length > 0 && (
+        <div className="metadata-section after-section">
+          <div className="section-header">
+            <h2>AFTER Metadata</h2>
+            <span className="badge success">{afterMetadata.length} tables</span>
+          </div>
+          
+          <StatsCards 
+            stats={calculateStats(afterMetadata)} 
+            totalRecords={afterMetadata.length} 
+          />
+          
+          <MetadataTable data={afterMetadata} type="after" />
+        </div>
+      )}
+
+      {/* Instructions */}
+      {!uploadSuccess && (
+        <div className="instructions">
+          <h3>How to Use</h3>
+          <ol>
+            <li>Enter your workspace name and select target system</li>
+            <li>Upload your PBIP project folder</li>
+            <li>Click "Extract PBIP Data" to extract BEFORE metadata</li>
+            <li>Enter connection details</li>
+            <li>Click "Change Connection & SQL" to update and view AFTER metadata</li>
+          </ol>
+        </div>
+      )}
     </div>
   );
 }

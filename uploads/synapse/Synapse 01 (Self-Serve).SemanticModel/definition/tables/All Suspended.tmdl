@@ -1,0 +1,75 @@
+table 'All Suspended'
+	lineageTag: 8f4272c0-d651-4d3b-a929-3eecb34a10ca
+
+	measure Suspended_count = count('All Suspended'[request_id])+0
+		formatString: 0
+		lineageTag: 41c73655-9ebe-4af9-9858-92f23a77d9f5
+
+	column request_id
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: a6735ddd-c82c-47f3-87e7-24ba90bd8aed
+		summarizeBy: none
+		sourceColumn: request_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column importance
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: 3b98ebdd-ff28-415e-abac-383582b6df66
+		summarizeBy: none
+		sourceColumn: importance
+
+		annotation SummarizationSetBy = Automatic
+
+	column login_name
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: f0b7283c-914b-418b-b92d-8d684f717815
+		summarizeBy: none
+		sourceColumn: login_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column wait_sec
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: 13a13d8e-abab-4605-aa36-aac2d257a688
+		summarizeBy: sum
+		sourceColumn: wait_sec
+
+		annotation SummarizationSetBy = Automatic
+
+	column classifier_name
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: 42042cd3-9f4e-4d10-a804-f63f2d40cf1f
+		summarizeBy: none
+		sourceColumn: classifier_name
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'All Suspended-f21bc763-b67e-4c5e-b519-fdaed434bf37' = m
+		mode: directQuery
+		source =
+				let
+				    
+Source = Lakehouse.Contents(
+    "https://api.fabric.microsoft.com",
+    [
+        WorkspaceId = "dummy_workspace_id",
+        LakehouseId = "dummy_lakehouse_id"
+    ]
+)
+
+
+inner join dummy_schema.dummy_table  b#(lf)on dummy_schema.dummy_table=dummy_schema.dummy_table#(lf)where dummy_schema.dummy_table in ('Suspended')", CreateNavigationProperties=false])
+				in
+				    Source
+
+	annotation PBI_ResultType = Table
+
+	annotation PBI_NavigationStepName = Navigation
+

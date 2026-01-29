@@ -1,14 +1,27 @@
 from pathlib import Path
 import re
+import sys
+import json
+
+def get_params():
+    """Load parameters from temp file or use defaults"""
+    if Path('temp_params.json').exists():
+        with open('temp_params.json', 'r') as f:
+            return json.load(f)
+    return {
+        'pbip_path': "Synapse 01 (Self-Serve).SemanticModel",
+        'workspace_id': 'dummy_workspace_id',
+        'lakehouse_id': 'dummy_lakehouse_id'
+    }
+
+params = get_params()
 
 # 🔹 Base folder where PBIP semantic model lives
-BASE_PATH = Path(
-    "Synapse 01 (Self-Serve).SemanticModel/definition/tables"
-)
+BASE_PATH = Path(params['pbip_path']) / "definition/tables"
 
 # 🔹 Dummy Fabric identifiers
-FABRIC_WORKSPACE_ID = "dummy_workspace_id"
-FABRIC_LAKEHOUSE_ID = "dummy_lakehouse_id"
+FABRIC_WORKSPACE_ID = params.get('workspace_id', 'dummy_workspace_id')
+FABRIC_LAKEHOUSE_ID = params.get('lakehouse_id', 'dummy_lakehouse_id')
 
 def migrate_to_fabric(m_text: str) -> str:
     """
@@ -36,7 +49,7 @@ Source = Lakehouse.Contents(
 
 
 def process_tables():
-    print(f"📂 Scanning tables in: {BASE_PATH.resolve()}")
+    print(f"[INFO] Scanning tables in: {BASE_PATH.resolve()}")
 
     for tmdl in BASE_PATH.glob("*.tmdl"):
         original_text = tmdl.read_text(encoding="utf-8", errors="ignore")
@@ -45,9 +58,9 @@ def process_tables():
 
         if updated_text != original_text:
             tmdl.write_text(updated_text, encoding="utf-8")
-            print(f"✅ Migrated: {tmdl.name}")
+            print(f"[OK] Migrated: {tmdl.name}")
         else:
-            print(f"⏭️ Skipped (no connector): {tmdl.name}")
+            print(f"[SKIP] Skipped (no connector): {tmdl.name}")
 
 
 if __name__ == "__main__":

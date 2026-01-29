@@ -1,0 +1,66 @@
+Type,Name,Before,After,Before_Source,Before_Conn,After_Source,After_Conn,Notes,File_Name,Connection_Type,Server,After_Server,Database_Name,After_Database,Connection_String,M_Query_Preview
+Table,All Suspended,DirectQuery,DirectQuery,Original,Original,Fabric Lakehouse,Lakehouse.Contents,After metadata collection,tables/All Suspended.tmdl,Lakehouse.Contents,dummy_workspace_id,dummy_workspace_id,dummy_lakehouse_id,dummy_lakehouse_id,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+inner join dummy_schema.dummy_table  b#(lf)on dummy_schema.dummy_table=dummy_schema.dummy_table#(lf)where dummy_schema.dummy_table in ('Suspended')"", CreateNavigationProperties=false])
+				in
+				    Source"
+Table,All_Running,DirectQuery,DirectQuery,Original,Original,Fabric Lakehouse,Lakehouse.Contents,After metadata collection,tables/All_Running.tmdl,Lakehouse.Contents,dummy_workspace_id,dummy_workspace_id,dummy_lakehouse_id,dummy_lakehouse_id,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+in_name,#(lf)    dummy_schema.dummy_table,#(lf)    total_elapsed_time / (1000 * 60) AS Minutes,#(lf)    resource_class,#(lf)    importance,#(lf)    group_name,#(lf)    resource_allocation_percentage,#(lf)    result_cache_hit,#(lf)    app_name,#(lf)    command,#(lf)    'KILL ''' + CAST(dummy_schema.dummy_table AS V"
+Table,All_Running_2,DirectQuery,DirectQuery,Original,Original,Fabric Lakehouse,Lakehouse.Contents,After metadata collection,tables/All_Running_2.tmdl,Lakehouse.Contents,dummy_workspace_id,dummy_workspace_id,dummy_lakehouse_id,dummy_lakehouse_id,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+in_name,dummy_schema.dummy_table,(total_elapsed_time%(1000*60*60))/(1000*60)as Minutes,resource_class,importance,group_name,resource_allocation_percentage,result_cache_hit,app_name,#(lf)case when command2 is null then command#(lf)else command2 end command#(lf) #(lf)from dummy_schema.dummy_table a#(lf) #(lf)inner j"
+Table,OpenSessions,DirectQuery,DirectQuery,Original,Original,Fabric Lakehouse,Lakehouse.Contents,After metadata collection,tables/OpenSessions.tmdl,Lakehouse.Contents,dummy_workspace_id,dummy_workspace_id,dummy_lakehouse_id,dummy_lakehouse_id,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+in ('Idle','Active')#(lf)""])
+				in
+				    Source"
+Table,request_steps,DirectQuery,DirectQuery,Original,Original,Fabric Lakehouse,Lakehouse.Contents,After metadata collection,tables/request_steps.tmdl,Lakehouse.Contents,dummy_workspace_id,dummy_workspace_id,dummy_lakehouse_id,dummy_lakehouse_id,dummy_connection,"let
+				    
+Source = Lakehouse.Contents(
+    ""https://api.fabric.microsoft.com"",
+    [
+        WorkspaceId = ""dummy_workspace_id"",
+        LakehouseId = ""dummy_lakehouse_id""
+    ]
+)
+
+
+in
+				    Source"

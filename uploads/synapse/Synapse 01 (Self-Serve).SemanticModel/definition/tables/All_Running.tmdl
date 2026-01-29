@@ -1,0 +1,153 @@
+table All_Running
+	lineageTag: 535c5151-717f-4938-a6a3-118cd986d8d5
+
+	measure Running_count = count(All_Running[request_id])+0
+		formatString: 0
+		lineageTag: 491bd359-1188-4a8f-ba48-48c098a96d00
+
+	measure Resourse%count = sum(All_Running[resource_allocation_percentage])+0
+		lineageTag: f493663d-8716-4d72-a36d-0bc224ab68bf
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column login_name
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: 79f46799-e95e-44c2-a66d-4cdb7b2e0bfe
+		summarizeBy: none
+		sourceColumn: login_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column request_id
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: 1c578a51-7014-4e90-b5e2-c91e9f547b12
+		summarizeBy: none
+		sourceColumn: request_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column resource_class
+		dataType: string
+		sourceProviderType: nvarchar(20)
+		lineageTag: 783dc5a1-df0d-4035-bd21-7b990bf79298
+		summarizeBy: none
+		sourceColumn: resource_class
+
+		annotation SummarizationSetBy = Automatic
+
+	column importance
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: 4b3a5c24-e3d3-48ec-bb62-34405ceb5c84
+		summarizeBy: none
+		sourceColumn: importance
+
+		annotation SummarizationSetBy = Automatic
+
+	column group_name
+		dataType: string
+		sourceProviderType: nvarchar(128)
+		lineageTag: 6c618cf6-4e0c-4b12-b2a4-89580f6bd818
+		summarizeBy: none
+		sourceColumn: group_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column resource_allocation_percentage
+		dataType: double
+		sourceProviderType: decimal(5, 2)
+		lineageTag: 3582553a-393f-44ce-a82a-d104ed31adb5
+		summarizeBy: none
+		sourceColumn: resource_allocation_percentage
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column result_cache_hit
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: e6df8db4-3df9-46a1-8349-a784b816c4ef
+		summarizeBy: none
+		sourceColumn: result_cache_hit
+
+		annotation SummarizationSetBy = Automatic
+
+	column app_name
+		dataType: string
+		sourceProviderType: nvarchar(255)
+		lineageTag: 28f3405d-9315-4b94-aeed-60b6f0442b9d
+		summarizeBy: none
+		sourceColumn: app_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column Minutes
+		dataType: int64
+		formatString: 0
+		sourceProviderType: int
+		lineageTag: 40e98772-ca4a-44e1-89db-4c1bb31c8e9a
+		summarizeBy: none
+		sourceColumn: Minutes
+
+		annotation SummarizationSetBy = Automatic
+
+	column command
+		dataType: string
+		sourceProviderType: nvarchar(4000)
+		lineageTag: 3a3b060e-2cdb-494e-94c0-19df25362a2f
+		summarizeBy: none
+		sourceColumn: command
+
+		annotation SummarizationSetBy = Automatic
+
+	column Last_Refresh = now()
+		formatString: General Date
+		lineageTag: c09d0959-1c6d-4b06-bf87-82f349e31476
+		summarizeBy: none
+
+		annotation SummarizationSetBy = Automatic
+
+	column kill_command
+		dataType: string
+		sourceProviderType: varchar(27)
+		lineageTag: 064bc837-225f-43c4-adde-314d4314968f
+		summarizeBy: none
+		sourceColumn: kill_command
+
+		annotation SummarizationSetBy = Automatic
+
+	column status
+		dataType: string
+		sourceProviderType: nvarchar(32)
+		lineageTag: 2e3e2ba3-8227-4c29-846e-bf6351e303f0
+		summarizeBy: none
+		sourceColumn: status
+
+		annotation SummarizationSetBy = Automatic
+
+	partition All_Running-a96d954a-f8d2-43b5-b447-65986e36a119 = m
+		mode: directQuery
+		source =
+				let
+				    
+Source = Lakehouse.Contents(
+    "https://api.fabric.microsoft.com",
+    [
+        WorkspaceId = "dummy_workspace_id",
+        LakehouseId = "dummy_lakehouse_id"
+    ]
+)
+
+
+in_name,#(lf)    dummy_schema.dummy_table,#(lf)    total_elapsed_time / (1000 * 60) AS Minutes,#(lf)    resource_class,#(lf)    importance,#(lf)    group_name,#(lf)    resource_allocation_percentage,#(lf)    result_cache_hit,#(lf)    app_name,#(lf)    command,#(lf)    'KILL ''' + CAST(dummy_schema.dummy_table AS VARCHAR(20)) + '''' AS kill_command#(lf)#(tab),dummy_schema.dummy_table#(lf)FROM #(lf)    dummy_schema.dummy_table a#(lf)INNER JOIN #(lf)    dummy_schema.dummy_table b#(lf)ON #(lf)    dummy_schema.dummy_table = dummy_schema.dummy_table#(lf)WHERE #(lf)    dummy_schema.dummy_table IN ('running')#(lf)    AND dummy_schema.dummy_table IS NOT NULL;", CreateNavigationProperties=false])
+				in
+				    Source
+
+	annotation PBI_ResultType = Table
+
+	annotation PBI_NavigationStepName = Navigation
+

@@ -1,0 +1,22 @@
+model Model
+	culture: en-IN
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: en-IN
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation PBI_QueryOrder = ["All_Running","All Suspended","OpenSessions","request_steps","All_Running_2"]
+
+annotation __PBI_TimeIntelligenceEnabled = 1
+
+annotation PBI_ProTooling = ["DevMode"]
+
+ref table All_Running
+ref table 'All Suspended'
+ref table OpenSessions
+ref table request_steps
+ref table All_Running_2
+
+ref cultureInfo en-IN
+
