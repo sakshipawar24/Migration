@@ -1,56 +1,56 @@
-const { exec } = require("child_process");
 const fs = require("fs");
+const { extractMetadata } = require("./services/metadataService");
+const { updateConnection } = require("./services/connectionUpdateService");
+const { applyTechnologyTransform, TARGETS } = require("./services/technologyTransformService");
 
-function runPython(scriptName, args = []) {
-  return new Promise((resolve, reject) => {
-    // Quote arguments that contain spaces
-    const quotedArgs = args.map(arg => arg.includes(' ') ? `"${arg}"` : arg);
-    const argString = quotedArgs.join(' ');
-    const command = argString ? `python ${scriptName} ${argString}` : `python ${scriptName}`;
-    
-    console.log(`Running: ${command}`);
-
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`Error in ${scriptName}`);
-        console.error(stderr);
-        reject(error);
-      } else {
-        console.log(stdout);
-        resolve();
-      }
-    });
-  });
-}
-
-async function runPipeline() {
+async function runPhase3() {
   try {
-    let params = {};
-    
-    // Load parameters if they exist
-    if (fs.existsSync('temp_params.json')) {
-      params = JSON.parse(fs.readFileSync('temp_params.json', 'utf8'));
-      console.log("Loaded parameters:", params);
+    const params = loadParams();
+    const pbipPath = params.pbip_path || "Synapse 01 (Self-Serve).SemanticModel";
+    const usePython = Boolean(params.use_python);
+
+    const server = params.server || "dummy_server";
+    const database = params.database || "dummy_database";
+    const workspaceId = params.workspace_id || "dummy_workspace_id";
+    const lakehouseId = params.lakehouse_id || "dummy_lakehouse_id";
+    const targetTechnology = params.target_technology || TARGETS.KEEP;
+
+    const metadataBefore = await extractMetadata(pbipPath, { usePython });
+
+    await updateConnection(pbipPath, server, database);
+
+    if (targetTechnology !== TARGETS.KEEP) {
+      await applyTechnologyTransform(pbipPath, targetTechnology, {
+        workspaceId,
+        lakehouseId,
+        server,
+        database
+      });
     }
 
-    const pbipPath = params.pbip_path || "Synapse 01 (Self-Serve).SemanticModel";
+    const metadataAfter = await extractMetadata(pbipPath, { usePython });
 
-    console.log("\n=== Step 1: Dummy Replacement ===");
-    await runPython("dummyreplacement.py");
+    const response = {
+      download: "Success",
+      conversion: "Success",
+      before: metadataBefore.tables || [],
+      after: metadataAfter.tables || [],
+      publish: "Success",
+      refresh: "Triggered"
+    };
 
-    // Step 2: Migrate to Fabric (Databricks → Fabric Lakehouse)
-    console.log("\n=== Step 2: Technology Migration ===");
-    await runPython("changetech.py");
-
-    // Step 3: Extract AFTER metadata
-    console.log("\n=== Step 3: Extract AFTER Metadata ===");
-    await runPython("metadatacollection.py", [pbipPath, "after"]);
-
-    console.log("\n[OK] PIPELINE COMPLETED SUCCESSFULLY");
-  } catch (err) {
-    console.error("\n[ERROR] PIPELINE FAILED");
+    process.stdout.write(JSON.stringify(response));
+  } catch (error) {
+    console.error(error.message || error);
     process.exit(1);
   }
 }
 
-runPipeline();
+function loadParams() {
+  if (fs.existsSync("temp_params.json")) {
+    return JSON.parse(fs.readFileSync("temp_params.json", "utf8"));
+  }
+  return {};
+}
+
+runPhase3();

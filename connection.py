@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 PBISM_FILE = Path(
-    r"C:\Users\hp\Documents\Internship\Final\Synapse 01 (Self-Serve).SemanticModel\defination.pbism"
+    r"D:\Internship\Final\Synapse 01 (Self-Serve).SemanticModel\defination.pbism"
 )
 
 def extract_from_pbism():
