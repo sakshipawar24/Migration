@@ -11,38 +11,38 @@ print("PBIP UI-Driven Converter - System Test")
 print("=" * 70)
 
 # Test 1: Python Dependencies
-print("\n📦 Test 1: Python Dependencies")
+print("\nTest 1: Python Dependencies")
 try:
     import flask
     import flask_cors
     from werkzeug.utils import secure_filename
-    print("✅ Flask and extensions installed")
+    print("[OK] Flask and extensions installed")
 except ImportError as e:
-    print(f"❌ Missing dependency: {e}")
+    print(f"[ERROR] Missing dependency: {e}")
     print("   Run: pip install -r requirements.txt")
     sys.exit(1)
 
 # Test 2: Node.js
-print("\n📦 Test 2: Node.js")
+print("\nTest 2: Node.js")
 import subprocess
 try:
     result = subprocess.run(["node", "--version"], capture_output=True, text=True)
-    print(f"✅ Node.js {result.stdout.strip()}")
+    print(f"[OK] Node.js {result.stdout.strip()}")
 except FileNotFoundError:
-    print("❌ Node.js not found")
+    print("[ERROR] Node.js not found")
     print("   Install from: https://nodejs.org/")
     sys.exit(1)
 
 # Test 3: Frontend Dependencies
-print("\n📦 Test 3: Frontend Dependencies")
+print("\nTest 3: Frontend Dependencies")
 if (Path("metadata-ui") / "node_modules").exists():
-    print("✅ Frontend dependencies installed")
+    print("[OK] Frontend dependencies installed")
 else:
-    print("⚠️  Frontend dependencies not installed")
+    print("[WARN] Frontend dependencies not installed")
     print("   Run: cd metadata-ui && npm install")
 
 # Test 4: Python Scripts
-print("\n📄 Test 4: Python Scripts")
+print("\n Test 4: Python Scripts")
 scripts = [
     "app.py",
     "metadatacollection.py",
@@ -54,9 +54,9 @@ scripts = [
 all_exist = True
 for script in scripts:
     if Path(script).exists():
-        print(f"✅ {script}")
+        print(f"[OK] {script}")
     else:
-        print(f"❌ {script} missing")
+        print(f"[ERROR] {script} missing")
         all_exist = False
 
 if not all_exist:
@@ -64,21 +64,21 @@ if not all_exist:
     sys.exit(1)
 
 # Test 5: Import Python Modules
-print("\n🔬 Test 5: Python Module Imports")
+print("\nTest 5: Python Module Imports")
 try:
     import metadatacollection
-    print("✅ metadatacollection.py")
+    print("[OK] metadatacollection.py")
     
     # Check if function exists
     if hasattr(metadatacollection, 'collect_metadata'):
-        print("✅ collect_metadata() function found")
+        print("[OK] collect_metadata() function found")
     else:
-        print("⚠️  collect_metadata() function not found")
+        print("[WARN] collect_metadata() function not found")
 except Exception as e:
-    print(f"❌ Error importing metadatacollection: {e}")
+    print(f"[ERROR] Error importing metadatacollection: {e}")
 
 # Test 6: Directory Structure
-print("\n📁 Test 6: Directory Structure")
+print("\nTest 6: Directory Structure")
 required_dirs = [
     "metadata-ui/src",
     "metadata-ui/src/components",
@@ -87,12 +87,12 @@ required_dirs = [
 
 for dir_path in required_dirs:
     if Path(dir_path).exists():
-        print(f"✅ {dir_path}")
+        print(f"[OK] {dir_path}")
     else:
-        print(f"❌ {dir_path} missing")
+        print(f"[ERROR] {dir_path} missing")
 
 # Test 7: React Components
-print("\n⚛️  Test 7: React Components")
+print("\nTest 7: React Components")
 components = [
     "metadata-ui/src/App.js",
     "metadata-ui/src/App.css",
@@ -104,35 +104,35 @@ components = [
 
 for component in components:
     if Path(component).exists():
-        print(f"✅ {Path(component).name}")
+        print(f"[OK] {Path(component).name}")
     else:
-        print(f"❌ {Path(component).name} missing")
+        print(f"[ERROR] {Path(component).name} missing")
 
 # Test 8: Upload Directory
-print("\n📤 Test 8: Upload Directory")
+print("\nTest 8: Upload Directory")
 upload_dir = Path("uploads")
 if not upload_dir.exists():
     upload_dir.mkdir()
-    print("✅ Created uploads/ directory")
+    print("[OK] Created uploads/ directory")
 else:
-    print("✅ uploads/ directory exists")
+    print("[OK] uploads/ directory exists")
 
 # Test 9: Sample PBIP (Optional)
-print("\n📊 Test 9: Sample PBIP (Optional)")
+print("\nTest 9: Sample PBIP (Optional)")
 sample_pbip = Path("Synapse 01 (Self-Serve).SemanticModel")
 if sample_pbip.exists():
-    print("✅ Sample PBIP found")
+    print("[OK] Sample PBIP found")
     tables_dir = sample_pbip / "definition" / "tables"
     if tables_dir.exists():
         tmdl_files = list(tables_dir.glob("*.tmdl"))
-        print(f"✅ Found {len(tmdl_files)} .tmdl files")
+        print(f"[OK] Found {len(tmdl_files)} .tmdl files")
     else:
-        print("⚠️  definition/tables directory not found")
+        print("[WARN] definition/tables directory not found")
 else:
-    print("⚠️  Sample PBIP not found (OK if using your own)")
+    print("[WARN] Sample PBIP not found (OK if using your own)")
 
 # Test 10: Port Availability
-print("\n🔌 Test 10: Port Availability")
+print("\nTest 10: Port Availability")
 import socket
 
 def check_port(port):
@@ -142,22 +142,22 @@ def check_port(port):
     return result != 0  # True if port is free
 
 if check_port(5000):
-    print("✅ Port 5000 (Backend) available")
+    print("[OK] Port 5000 (Backend) available")
 else:
-    print("⚠️  Port 5000 in use (Backend may fail to start)")
+    print("[WARN] Port 5000 in use (Backend may fail to start)")
 
 if check_port(3000):
-    print("✅ Port 3000 (Frontend) available")
+    print("[OK] Port 3000 (Frontend) available")
 else:
-    print("⚠️  Port 3000 in use (Frontend may fail to start)")
+    print("[WARN] Port 3000 in use (Frontend may fail to start)")
 
 # Summary
 print("\n" + "=" * 70)
-print("📋 Test Summary")
+print("Test Summary")
 print("=" * 70)
-print("✅ All critical tests passed!")
-print("\n🚀 You're ready to start the application:")
+print("[OK] All critical tests passed!")
+print("\nYou're ready to start the application:")
 print("   Option 1: python start.py")
 print("   Option 2: python app.py (then cd metadata-ui && npm start)")
-print("\n📖 For usage instructions, see QUICKSTART.md")
+print("\n For usage instructions, see QUICKSTART.md")
 print("=" * 70)
