@@ -1159,4 +1159,5 @@ if __name__ == '__main__':
     print("Starting PBIP Metadata Viewer API...")
     print("Upload folder: uploads/")
     print("Backend running on http://localhost:5000")
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    debug_mode = str(os.environ.get('FLASK_DEBUG', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
+    app.run(debug=debug_mode, use_reloader=False, port=5000, host='0.0.0.0')
