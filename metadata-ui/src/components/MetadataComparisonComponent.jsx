@@ -111,12 +111,13 @@ function MetadataComparisonComponent({
                   const tableName = getRowTableName(row);
                   const query = row.mQuery || "";
                   const derived = extractConnectionFromQuery(query);
+                  const connectorType = deriveConnectorType(row, query);
 
                   return (
                     <tr key={row.name}>
                       <td>Table</td>
                       <td>{tableName}</td>
-                      <td><ConnectorTypeBadge connectorType={row.sourceConnectorType || row.detectedSourceType || row.connectionType || "Unknown"} /></td>
+                      <td><ConnectorTypeBadge connectorType={connectorType} /></td>
                       <td>{row.mode || ""}</td>
                       <td>{row.source || ""}</td>
                       <td>{row.connectionType || ""}</td>
@@ -166,12 +167,13 @@ function MetadataComparisonComponent({
                 {filteredAfter.map((row) => {
                   const query = row.mQuery || "";
                   const derived = extractConnectionFromQuery(query);
+                  const connectorType = deriveConnectorType(row, query);
 
                   return (
                   <tr key={row.name}>
                     <td>Table</td>
                     <td>{getRowTableName(row)}</td>
-                    <td><ConnectorTypeBadge connectorType={row.targetConnectorType || row.sourceConnectorType || row.detectedSourceType || row.connectionType || "Unknown"} /></td>
+                    <td><ConnectorTypeBadge connectorType={connectorType} /></td>
                     <td>{getAfterValue("mode", row.mode)}</td>
                     <td>{getAfterValue("source", row.source)}</td>
                     <td>{getAfterValue("connectionType", row.connectionType)}</td>
@@ -307,6 +309,67 @@ function extractConnectionFromQuery(query = "") {
   }
 
   return { server: "", database: "" };
+}
+
+function deriveConnectorType(row = {}, query = "") {
+  const explicit = row.targetConnectorType || row.sourceConnectorType || row.detectedSourceType;
+  if (explicit && String(explicit).trim()) {
+    return String(explicit).trim();
+  }
+
+  const rawConnectionType = String(
+    row.connectionType || row.Connection_Type || row.After_Connection_Type || row.Before_Connection_Type || ""
+  ).toLowerCase();
+  const rawSource = String(row.source || row.After_Source || row.Before_Source || "").toLowerCase();
+  const rawQuery = String(query || row.M_Query_Preview || row.query || "").toLowerCase();
+  const signal = `${rawConnectionType} ${rawSource} ${rawQuery}`;
+
+  if (signal.includes('sql.database') || signal.includes('sql server')) {
+    return 'SQLServer';
+  }
+  if (signal.includes('lakehouse.contents') || signal.includes('fabric')) {
+    return 'FabricLakehouse';
+  }
+  if (signal.includes('sharepoint.files') || signal.includes('sharepoint')) {
+    return 'SharePoint';
+  }
+  if (signal.includes('odata.feed') || signal.includes('odata')) {
+    return 'OData';
+  }
+  if (signal.includes('databricks.contents') || signal.includes('databricks')) {
+    return 'Databricks';
+  }
+  if (signal.includes('snowflake')) {
+    return 'Snowflake';
+  }
+  if (signal.includes('postgresql')) {
+    return 'PostgreSQL';
+  }
+  if (signal.includes('mysql')) {
+    return 'MySQL';
+  }
+  if (signal.includes('excel.workbook')) {
+    return 'Excel';
+  }
+  if (signal.includes('csv.document')) {
+    return 'CSV';
+  }
+  if (signal.includes('json.document')) {
+    return 'JSON';
+  }
+  if (signal.includes('parquet.document')) {
+    return 'Parquet';
+  }
+  if (signal.includes('web.contents')) {
+    return 'REST';
+  }
+
+  const isInternal = !rawQuery && (!rawConnectionType || rawConnectionType === 'unknown') && (!rawSource || rawSource === 'unknown');
+  if (isInternal) {
+    return 'InternalModel';
+  }
+
+  return 'Unknown';
 }
 
 export default MetadataComparisonComponent;

@@ -1531,8 +1531,6 @@ const changeConnection = async (reportName = null) => {
     metadataCache,
     pbipReports,
     pbixReports,
-    publishStatus,
-    refreshStatus,
     reportTrackerStatus
   ]);
 

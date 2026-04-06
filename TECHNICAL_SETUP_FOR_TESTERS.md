@@ -74,7 +74,22 @@ npm start
 - Frontend UI: http://localhost:3000
 - Backend API: http://localhost:5000
 
-## 6. Minimum Validation Checklist
+## 6. Folder Locations on the Tester Machine
+
+The app ships with default fallback paths like `D:\PBIX` and `D:\PBIP`, but testers do not need to use those exact locations.
+
+- They can clone the repo anywhere on their laptop.
+- They can store PBIX and PBIP files in any folder they prefer, such as `C:\PBIX`, `C:\PBIP`, `E:\Work\PBIP`, or a shared drive.
+- They should simply enter the correct local path in the app UI if their files are stored somewhere else.
+
+If the default folders do not exist on their machine, they can either:
+
+- Create those folders, or
+- Change the folder path in the UI before running download, convert, or metadata actions.
+
+For client testing, it is usually better to use a folder path that is convenient for the tester rather than changing their system to match the default path.
+
+## 7. Minimum Validation Checklist
 
 After app start, confirm all below:
 
@@ -86,8 +101,10 @@ After app start, confirm all below:
 - Before/After metadata table loads
 - Report tracker updates and remains after page refresh
 - Download/Publish/Refresh actions can be triggered (if credentials and workspace access are valid)
+- File paths entered in the UI point to folders that exist on the tester machine
+- The app works after refresh without losing the report tracker state
 
-## 7. Power BI / Fabric Configuration Needed for Full Testing
+## 8. Power BI / Fabric Configuration Needed for Full Testing
 
 For real client testing, tester should have:
 
@@ -100,7 +117,9 @@ For real client testing, tester should have:
 
 Set these values through the app UI in the Power BI configuration section.
 
-## 8. Common Setup Issues
+If the tester is only validating the UI and metadata flow, they can use local dummy folders and sample PBIP/PBIX files first before connecting to a live client workspace.
+
+## 9. Common Setup Issues
 
 1. PowerShell script blocked
 
@@ -124,13 +143,19 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 - Ensure backend terminal is running without errors.
 
-## 9. Security Notes
+6. Wrong folder path entered in the UI
+
+- Make sure the selected PBIX/PBIP folder exists on the tester machine.
+- Use a local folder that the tester can access without admin permissions.
+
+## 10. Security Notes
 
 - Do not commit real credentials into .env or source files.
 - Use local environment variables or UI input for secrets.
 - Keep client workspace IDs and secrets private.
+- If using a shared client laptop, do not save real credentials into the repo.
 
-## 10. Quick Share Message (You Can Forward)
+## 11. Quick Share Message (You Can Forward)
 
 Please clone the repo and run the app with the bootstrap script:
 
@@ -143,3 +168,5 @@ If bootstrap is blocked in PowerShell, run:
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 Then test upload, conversion, metadata comparison, and Power BI operations in the UI.
+
+For file locations, use any local folder that is convenient on your machine. The app does not require the same `D:\PBIX` or `D:\PBIP` path for everyone.
