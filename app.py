@@ -128,6 +128,45 @@ def get_power_bi_config(data):
     return tenant_id, client_id, client_secret, source_workspace_id, target_workspace_id, pbix_folder
 
 
+def resolve_pbip_folder(preferred_folder=None):
+    """Resolve the PBIP folder to an existing path with sensible fallbacks."""
+    candidates = []
+
+    if preferred_folder:
+        candidates.append(str(preferred_folder))
+
+    env_pbip = os.environ.get('POWERBI_PBIP_FOLDER') or os.environ.get('PBI_PBIP_FOLDER')
+    if env_pbip:
+        candidates.append(str(env_pbip))
+
+    configured_pbix = app_state.get('pbi_pbix_folder')
+    if configured_pbix:
+        configured_pbip = str(configured_pbix).replace('PBIX', 'PBIP')
+        candidates.append(configured_pbip)
+
+    candidates.extend([r"D:\PBIP", r"C:\PBIP"])
+
+    seen = set()
+    normalized_candidates = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        normalized = str(candidate).strip()
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized_candidates.append(normalized)
+
+    for candidate in normalized_candidates:
+        if Path(candidate).exists():
+            return candidate
+
+    return normalized_candidates[0] if normalized_candidates else r"D:\PBIP"
+
+
 def run_power_bi_action(action, data, timeout=900):
     tenant_id, client_id, client_secret, source_workspace_id, target_workspace_id, pbix_folder = get_power_bi_config(data)
 
@@ -898,7 +937,7 @@ def refresh_datasets():
 def list_reports():
     """List available PBIP reports from the PBIP folder"""
     try:
-        pbip_folder = request.args.get('pbipFolder') or r"D:\PBIP"
+        pbip_folder = resolve_pbip_folder(request.args.get('pbipFolder'))
         pbip_path = Path(pbip_folder)
         
         if not pbip_path.exists():
@@ -956,7 +995,7 @@ def extract_report_metadata():
     try:
         data = request.get_json()
         report_name = data.get('reportName')
-        pbip_folder = data.get('pbipFolder') or r"D:\PBIP"
+        pbip_folder = resolve_pbip_folder(data.get('pbipFolder'))
         
         if not report_name:
             return jsonify({'success': False, 'error': 'Report name is required'}), 400
@@ -1088,7 +1127,7 @@ def extract_report_metadata():
 def get_metadata_cache():
     """Return all cached report metadata from PBIP _metadata folder."""
     try:
-        pbip_folder = request.args.get('pbipFolder') or r"D:\PBIP"
+        pbip_folder = resolve_pbip_folder(request.args.get('pbipFolder'))
         cache = load_metadata_cache(pbip_folder)
         return jsonify({'success': True, 'metadataCache': cache})
     except Exception as e:
@@ -1104,9 +1143,7 @@ def run_full_migration():
         if error:
             return jsonify({'success': False, 'error': error}), 400
 
-        pbip_folder = data.get('pbipFolder') if data else None
-        if not pbip_folder:
-            pbip_folder = r"D:\PBIP"
+        pbip_folder = resolve_pbip_folder(data.get('pbipFolder') if data else None)
 
         before_metadata, after_metadata = load_run_all_metadata(pbip_folder)
 
