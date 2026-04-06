@@ -175,8 +175,6 @@ function App() {
   const [downloadStatus, setDownloadStatus] = useState('idle');
   const [convertStatus, setConvertStatus] = useState('idle');
   const [connectionStatus, setConnectionStatus] = useState('idle');
-  const [summaryEmailRecipient, setSummaryEmailRecipient] = useState('');
-  const [sendingSummaryEmail, setSendingSummaryEmail] = useState(false);
   const [sessionDownloadedCount, setSessionDownloadedCount] = useState(0);
   const [sessionConvertedCount, setSessionConvertedCount] = useState(0);
 
@@ -290,6 +288,19 @@ function App() {
       }
 
       try {
+        const reportTrackerResponse = await fetch('http://localhost:5000/api/pbi/report-tracker');
+        const reportTrackerData = await reportTrackerResponse.json();
+        if (reportTrackerData.success && reportTrackerData.reportTrackerStatus && typeof reportTrackerData.reportTrackerStatus === 'object') {
+          setReportTrackerStatus((prev) => ({
+            ...prev,
+            ...reportTrackerData.reportTrackerStatus
+          }));
+        }
+      } catch (trackerErr) {
+        console.error('Failed to restore backend report tracker:', trackerErr);
+      }
+
+      try {
         const configResponse = await fetch('http://localhost:5000/api/pbi/config');
         const configData = await configResponse.json();
         if (configData.success) {
@@ -396,6 +407,13 @@ function App() {
     }
 
     localStorage.setItem(REPORT_TRACKER_STATUS_STORAGE_KEY, JSON.stringify(reportTrackerStatus));
+    fetch('http://localhost:5000/api/pbi/report-tracker', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportTrackerStatus })
+    }).catch((error) => {
+      console.error('Failed to persist report tracker status:', error);
+    });
   }, [isStorageHydrated, reportTrackerStatus]);
 
   useEffect(() => {
@@ -1584,104 +1602,6 @@ const changeConnection = async (reportName = null) => {
     XLSX.writeFile(workbook, fileName);
   };
 
-  const buildSummaryEmailContent = () => {
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    const generatedAtUtc = now.toISOString();
-    const downloadedCount = reportStatusRows.filter((row) => row.downloaded).length;
-    const convertedCount = reportStatusRows.filter((row) => row.converted).length;
-    const metadataExtractedCount = reportStatusRows.filter((row) => row.metadataBeforeCount > 0).length;
-    const connectionUpdatedCount = reportStatusRows.filter((row) => row.metadataAfterCount > 0).length;
-    const publishSuccessCount = reportStatusRows.filter((row) => row.publishStatus === 'Success').length;
-    const refreshSuccessCount = reportStatusRows.filter((row) => row.refreshStatus === 'Success').length;
-
-    const lines = [
-      'PBIP Migration Summary',
-      `Date: ${today}`,
-      `Generated At (UTC): ${generatedAtUtc}`,
-      '',
-      'Configuration',
-      `Tenant ID: ${tenantId || '-'}`,
-      `Client ID: ${clientId || '-'}`,
-      `Source Workspace: ${sourceWorkspaceId || '-'}`,
-      `Target Workspace: ${targetWorkspaceId || '-'}`,
-      `PBIX Folder: ${pbixFolder || '-'}`,
-      `Target Technology: ${autoTargetTechnology || '-'}`,
-      '',
-      'Workflow Status',
-      `Auth: ${authConfigured ? 'Configured' : 'Pending'}`,
-      `Download: ${formatStatusLabel(downloadStatus)}`,
-      `Convert: ${formatStatusLabel(convertStatus)}`,
-      `Connection: ${formatStatusLabel(connectionStatus)}`,
-      `Publish: ${formatStatusLabel(publishStatus)}`,
-      `Refresh: ${formatStatusLabel(refreshStatus)}`,
-      '',
-      'Operational Summary',
-      `Reports Downloaded: ${downloadedCount}`,
-      `Reports Converted: ${convertedCount}`,
-      `Metadata Extracted: ${metadataExtractedCount}`,
-      `Connections Updated: ${connectionUpdatedCount}`,
-      `Publish Success: ${publishSuccessCount}`,
-      `Refresh Success: ${refreshSuccessCount}`,
-      '',
-      'Per Report Status'
-    ];
-
-    if (reportStatusRows.length === 0) {
-      lines.push('No reports found.');
-    } else {
-      reportStatusRows.forEach((row, index) => {
-        lines.push(
-          `${index + 1}. ${row.displayName || row.reportName} | `
-          + `Download: ${row.downloaded ? 'Success' : 'Pending'} | `
-          + `Convert: ${row.converted ? 'Success' : 'Pending'} | `
-          + `Connection: ${row.metadataAfterCount > 0 ? 'Success' : 'Pending'} | `
-          + `Publish: ${row.publishStatus} | Refresh: ${row.refreshStatus} | `
-          + `Complexity: ${row.complexity}`
-        );
-      });
-    }
-
-    return lines.join('\n');
-  };
-
-  const sendSummaryByEmail = async () => {
-    const recipient = summaryEmailRecipient.trim();
-    if (!recipient) {
-      showStatus('Enter a recipient email address first.', 'warning');
-      return;
-    }
-
-    const now = new Date();
-    const stamp = now.toISOString().slice(0, 10);
-    const subject = `PBIP Migration Summary - ${stamp}`;
-
-    setSendingSummaryEmail(true);
-    try {
-      const response = await fetch('http://localhost:5000/api/send-summary-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          recipientEmail: recipient,
-          subject,
-          summaryContent: buildSummaryEmailContent(),
-          fileName: `migration-summary-${stamp}.txt`
-        })
-      });
-
-      const payload = await response.json();
-      if (!response.ok || !payload.success) {
-        throw new Error(payload.error || 'Failed to send summary email');
-      }
-
-      showStatus(payload.message || 'Summary email sent successfully.', 'success');
-    } catch (error) {
-      showStatus(error.message || 'Failed to send summary email.', 'error');
-    } finally {
-      setSendingSummaryEmail(false);
-    }
-  };
-
   const downloadReportStatus = () => {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
@@ -2174,21 +2094,6 @@ const changeConnection = async (reportName = null) => {
             </button>
             <button className="action-btn secondary-btn" onClick={downloadReportStatus}>
               Download Detailed Report
-            </button>
-            <input
-              type="email"
-              className="text-input summary-email-input"
-              value={summaryEmailRecipient}
-              onChange={(event) => setSummaryEmailRecipient(event.target.value)}
-              placeholder="recipient@example.com"
-              aria-label="Summary email recipient"
-            />
-            <button
-              className="action-btn secondary-btn"
-              onClick={sendSummaryByEmail}
-              disabled={sendingSummaryEmail || !summaryEmailRecipient.trim()}
-            >
-              {sendingSummaryEmail ? 'Sending...' : 'Send Summary Email'}
             </button>
           </div>
 
