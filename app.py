@@ -397,6 +397,71 @@ def normalize_sql_arg(value):
     return token
 
 
+def _to_sql_after_query(server, database):
+    safe_server = str(server or 'dummy_server').replace('"', '\\"')
+    safe_database = str(database or 'dummy_database').replace('"', '\\"')
+    return (
+        'let\\n'
+        f'    Source = Sql.Database("{safe_server}", "{safe_database}")\\n'
+        'in\\n'
+        '    Source'
+    )
+
+
+def _to_fabric_after_query(workspace_id, lakehouse_id):
+    safe_workspace = str(workspace_id or 'dummy_workspace_id').replace('"', '\\"')
+    safe_lakehouse = str(lakehouse_id or 'dummy_lakehouse_id').replace('"', '\\"')
+    return (
+        'let\\n'
+        f'    Source = Lakehouse.Contents([WorkspaceId="{safe_workspace}", LakehouseId="{safe_lakehouse}"])\\n'
+        'in\\n'
+        '    Source'
+    )
+
+
+def sanitize_after_metadata_queries(after_rows, target_technology=None, server=None, database=None, workspace_id=None, lakehouse_id=None):
+    """Replace AFTER query text with target connection values so original query text is not exposed."""
+    if not isinstance(after_rows, list):
+        return after_rows
+
+    normalized_target = str(target_technology or '').strip().lower()
+
+    for row in after_rows:
+        if not isinstance(row, dict):
+            continue
+
+        row_source = str(row.get('source') or '').strip().lower()
+        row_conn_type = str(row.get('connectionType') or '').strip().lower()
+        is_fabric_target = (
+            'fabric' in normalized_target
+            or 'lakehouse' in normalized_target
+            or 'lakehouse' in row_source
+            or 'lakehouse' in row_conn_type
+        )
+
+        if is_fabric_target:
+            resolved_workspace = workspace_id or row.get('server') or server or 'dummy_workspace_id'
+            resolved_lakehouse = lakehouse_id or row.get('database') or database or 'dummy_lakehouse_id'
+            sanitized_query = _to_fabric_after_query(resolved_workspace, resolved_lakehouse)
+            row['source'] = 'Fabric Lakehouse'
+            row['connectionType'] = 'Lakehouse.Contents'
+            row['server'] = resolved_workspace
+            row['database'] = resolved_lakehouse
+        else:
+            resolved_server = server or row.get('server') or 'dummy_server'
+            resolved_database = database or row.get('database') or 'dummy_database'
+            sanitized_query = _to_sql_after_query(resolved_server, resolved_database)
+            row['source'] = row.get('source') or 'SQL Server'
+            row['connectionType'] = row.get('connectionType') or 'Sql.Database'
+            row['server'] = resolved_server
+            row['database'] = resolved_database
+
+        row['mQuery'] = sanitized_query
+        row['M_Query_Preview'] = sanitized_query
+
+    return after_rows
+
+
 def resolve_semantic_model_path(pbip_path: Path):
     if pbip_path.name.endswith('.SemanticModel'):
         return pbip_path, pbip_path.parent
@@ -636,6 +701,14 @@ def change_connection():
 
         response = json.loads(result.stdout)
         after_metadata = response.get('after', [])
+        after_metadata = sanitize_after_metadata_queries(
+            after_metadata,
+            target_technology=target_technology,
+            server=server,
+            database=database,
+            workspace_id=workspace_id,
+            lakehouse_id=lakehouse_id
+        )
         
         # Load the ORIGINAL before metadata from _metadata folder
         pbip_folder = report_folder_path.parent if report_folder_path.parent.exists() else report_folder_path
@@ -1028,6 +1101,7 @@ def extract_report_metadata():
                         payload = json.loads(metadata_file.read_text(encoding='utf-8'))
                         before = payload.get('before', [])
                         after = payload.get('after', [])
+                        after = sanitize_after_metadata_queries(after)
                         
                         # Tag rows with report info
                         for row in before:
