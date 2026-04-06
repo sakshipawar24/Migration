@@ -17,6 +17,16 @@ import zipfile
 import tempfile
 from datetime import datetime
 
+from migration_engine.connectors.registry import ConnectorRegistry
+from migration_engine.models import TransformationRequest
+from migration_engine.services.auth import resolve_auth_config, validate_auth_config
+from migration_engine.services.batch_processor import run_batch
+from migration_engine.services.full_migration_service import FullMigrationService
+from migration_engine.services.metadata_classifier import classify_rows
+from migration_engine.services.transformation_engine import TransformationEngine
+from migration_engine.services.validation import pre_validate_request, post_validate_result
+from migration_engine.utils.audit_logger import read_audit_events, write_audit_event
+
 
 STATE_FILE = Path('app_state.json')
 
@@ -106,6 +116,10 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # State storage
 app_state = load_persisted_app_state()
 
+connector_registry = ConnectorRegistry()
+transformation_engine = TransformationEngine()
+full_migration_service = FullMigrationService(transformation_engine)
+
 POWER_BI_SCRIPT = Path('automation') / 'Run-Migration.ps1'
 PBI_TOOLS_PATH = Path(r"C:\Tools\pbi-tools\pbi-tools.exe")
 POWER_BI_DESKTOP_PATH = Path(r"C:\Program Files\Microsoft Power BI Desktop\bin\PBIDesktop.exe")
@@ -126,6 +140,45 @@ def get_power_bi_config(data):
     target_workspace_id = data.get('targetWorkspaceId') or app_state.get('pbi_target_workspace_id')
     pbix_folder = data.get('pbixFolder') or app_state.get('pbi_pbix_folder') or r"D:\PBIX"
     return tenant_id, client_id, client_secret, source_workspace_id, target_workspace_id, pbix_folder
+
+
+def resolve_pbip_folder(preferred_folder=None):
+    """Resolve the PBIP folder to an existing path with sensible fallbacks."""
+    candidates = []
+
+    if preferred_folder:
+        candidates.append(str(preferred_folder))
+
+    env_pbip = os.environ.get('POWERBI_PBIP_FOLDER') or os.environ.get('PBI_PBIP_FOLDER')
+    if env_pbip:
+        candidates.append(str(env_pbip))
+
+    configured_pbix = app_state.get('pbi_pbix_folder')
+    if configured_pbix:
+        configured_pbip = str(configured_pbix).replace('PBIX', 'PBIP')
+        candidates.append(configured_pbip)
+
+    candidates.extend([r"D:\PBIP", r"C:\PBIP"])
+
+    seen = set()
+    normalized_candidates = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        normalized = str(candidate).strip()
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized_candidates.append(normalized)
+
+    for candidate in normalized_candidates:
+        if Path(candidate).exists():
+            return candidate
+
+    return normalized_candidates[0] if normalized_candidates else r"D:\PBIP"
 
 
 def run_power_bi_action(action, data, timeout=900):
@@ -171,6 +224,7 @@ def run_power_bi_action(action, data, timeout=900):
     workspace_id = data.get('workspaceId') if data else None
     lakehouse_id = data.get('lakehouseId') if data else None
     transformed_pbix_folder = data.get('transformedPbixFolder') if data else None
+    report_names = data.get('reportNames') if data else None
     use_python = bool(data.get('usePython')) if data else False
 
     if server:
@@ -185,6 +239,10 @@ def run_power_bi_action(action, data, timeout=900):
         args.append(f"-LakehouseId '{lakehouse_id}'")
     if transformed_pbix_folder:
         args.append(f"-TransformedPbixFolder '{transformed_pbix_folder}'")
+    if isinstance(report_names, list) and len(report_names) > 0:
+        joined = '|'.join(str(name).replace("'", "''") for name in report_names if str(name).strip())
+        if joined:
+            args.append(f"-ReportNames '{joined}'")
     if use_python:
         args.append("-UsePython")
 
@@ -211,6 +269,7 @@ def load_run_all_metadata(pbip_folder):
             payload = json.loads(metadata_file.read_text(encoding='utf-8'))
             before = payload.get('before', [])
             after = payload.get('after', [])
+            after = sanitize_after_metadata_queries(after)
 
             for row in before:
                 row_name = row.get('name') or ''
@@ -289,6 +348,63 @@ def parse_download_summary(output_text):
     }
 
 
+def _extract_rows_from_metadata_payload(payload, section='before'):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        if section == 'after' and isinstance(payload.get('after'), list):
+            return payload.get('after') or []
+        if section == 'before' and isinstance(payload.get('before'), list):
+            return payload.get('before') or []
+        if isinstance(payload.get('rows'), list):
+            return payload.get('rows') or []
+        if isinstance(payload.get('tables'), list):
+            return payload.get('tables') or []
+    return []
+
+
+def resolve_request_rows(payload):
+    """Resolve metadata rows from direct payload, report lookup, or metadata file path."""
+    payload = payload or {}
+    section = str(payload.get('section') or 'before').strip().lower()
+
+    direct_rows = payload.get('rows')
+    if isinstance(direct_rows, list) and direct_rows:
+        return direct_rows
+
+    metadata_file_path = payload.get('metadataFilePath')
+    if metadata_file_path:
+        path = Path(metadata_file_path)
+        if path.exists() and path.is_file():
+            metadata_payload = json.loads(path.read_text(encoding='utf-8'))
+            rows = _extract_rows_from_metadata_payload(metadata_payload, section=section)
+            if rows:
+                return rows
+
+    report_name = payload.get('reportName')
+    if report_name:
+        pbip_folder = resolve_pbip_folder(payload.get('pbipFolder'))
+        cache = load_metadata_cache(pbip_folder)
+        exact = cache.get(report_name)
+        fallback = exact
+        if not fallback:
+            for key, value in cache.items():
+                if str(key).lower() == str(report_name).lower():
+                    fallback = value
+                    break
+
+        if fallback:
+            rows = fallback.get('after' if section == 'after' else 'before') or []
+            if rows:
+                return rows
+            # fallback between sections if requested section is empty
+            alt_rows = fallback.get('before' if section == 'after' else 'after') or []
+            if alt_rows:
+                return alt_rows
+
+    return []
+
+
 def normalize_connector_fields(row):
     m_query = (row.get('mQuery') or row.get('M_Query_Preview') or '')
     if not m_query:
@@ -356,6 +472,76 @@ def normalize_sql_arg(value):
         return quoted.group(1).strip()
 
     return token
+
+
+def _to_sql_after_query(server, database):
+    safe_server = str(server or 'dummy_server').replace('"', '\\"')
+    safe_database = str(database or 'dummy_database').replace('"', '\\"')
+    return (
+        'let\\n'
+        f'    Source = Sql.Database("{safe_server}", "{safe_database}")\\n'
+        'in\\n'
+        '    Source'
+    )
+
+
+def _to_fabric_after_query(workspace_id, lakehouse_id):
+    safe_workspace = str(workspace_id or 'dummy_workspace_id').replace('"', '\\"')
+    safe_lakehouse = str(lakehouse_id or 'dummy_lakehouse_id').replace('"', '\\"')
+    return (
+        'let\\n'
+        f'    Source = Lakehouse.Contents([WorkspaceId="{safe_workspace}", LakehouseId="{safe_lakehouse}"])\\n'
+        'in\\n'
+        '    Source'
+    )
+
+
+def sanitize_after_metadata_queries(after_rows, target_technology=None, server=None, database=None, workspace_id=None, lakehouse_id=None):
+    """Replace AFTER query text with target connection values so original query text is not exposed."""
+    if not isinstance(after_rows, list):
+        return after_rows
+
+    normalized_target = str(target_technology or '').strip().lower()
+
+    for row in after_rows:
+        if not isinstance(row, dict):
+            continue
+
+        row_source = str(row.get('source') or '').strip().lower()
+        row_conn_type = str(row.get('connectionType') or '').strip().lower()
+        is_fabric_target = (
+            'fabric' in normalized_target
+            or 'lakehouse' in normalized_target
+            or 'lakehouse' in row_source
+            or 'lakehouse' in row_conn_type
+        )
+
+        if is_fabric_target:
+            resolved_workspace = workspace_id or row.get('server') or server or 'dummy_workspace_id'
+            resolved_lakehouse = lakehouse_id or row.get('database') or database or 'dummy_lakehouse_id'
+            sanitized_query = _to_fabric_after_query(resolved_workspace, resolved_lakehouse)
+            row['source'] = 'Fabric Lakehouse'
+            row['connectionType'] = 'Lakehouse.Contents'
+            row['server'] = resolved_workspace
+            row['database'] = resolved_lakehouse
+        else:
+            resolved_server = server or row.get('server') or 'dummy_server'
+            resolved_database = database or row.get('database') or 'dummy_database'
+            sanitized_query = _to_sql_after_query(resolved_server, resolved_database)
+            row['source'] = row.get('source') or 'SQL Server'
+            row['connectionType'] = row.get('connectionType') or 'Sql.Database'
+            row['server'] = resolved_server
+            row['database'] = resolved_database
+
+        # Overwrite all common query fields so no original query text remains in AFTER metadata.
+        row['mQuery'] = sanitized_query
+        row['M_Query_Preview'] = sanitized_query
+        if 'query' in row:
+            row['query'] = sanitized_query
+        if 'sqlQuery' in row:
+            row['sqlQuery'] = sanitized_query
+
+    return after_rows
 
 
 def resolve_semantic_model_path(pbip_path: Path):
@@ -597,6 +783,14 @@ def change_connection():
 
         response = json.loads(result.stdout)
         after_metadata = response.get('after', [])
+        after_metadata = sanitize_after_metadata_queries(
+            after_metadata,
+            target_technology=target_technology,
+            server=server,
+            database=database,
+            workspace_id=workspace_id,
+            lakehouse_id=lakehouse_id
+        )
         
         # Load the ORIGINAL before metadata from _metadata folder
         pbip_folder = report_folder_path.parent if report_folder_path.parent.exists() else report_folder_path
@@ -659,6 +853,20 @@ def change_connection():
         app_state['before_metadata'] = before_metadata
         app_state['after_metadata'] = after_metadata
         persist_app_state()
+
+        write_audit_event('connection_transform', {
+            'report': report_name,
+            'source_type': 'Mixed',
+            'target_type': target_technology,
+            'mapping': {
+                'server': server,
+                'database': database,
+                'workspace_id': workspace_id,
+                'lakehouse_id': lakehouse_id,
+            },
+            'status': 'success',
+            'rows_affected': len(after_metadata),
+        })
 
         return jsonify({
             'success': True,
@@ -898,7 +1106,7 @@ def refresh_datasets():
 def list_reports():
     """List available PBIP reports from the PBIP folder"""
     try:
-        pbip_folder = request.args.get('pbipFolder') or r"D:\PBIP"
+        pbip_folder = resolve_pbip_folder(request.args.get('pbipFolder'))
         pbip_path = Path(pbip_folder)
         
         if not pbip_path.exists():
@@ -956,7 +1164,7 @@ def extract_report_metadata():
     try:
         data = request.get_json()
         report_name = data.get('reportName')
-        pbip_folder = data.get('pbipFolder') or r"D:\PBIP"
+        pbip_folder = resolve_pbip_folder(data.get('pbipFolder'))
         
         if not report_name:
             return jsonify({'success': False, 'error': 'Report name is required'}), 400
@@ -989,6 +1197,7 @@ def extract_report_metadata():
                         payload = json.loads(metadata_file.read_text(encoding='utf-8'))
                         before = payload.get('before', [])
                         after = payload.get('after', [])
+                        after = sanitize_after_metadata_queries(after)
                         
                         # Tag rows with report info
                         for row in before:
@@ -1088,7 +1297,7 @@ def extract_report_metadata():
 def get_metadata_cache():
     """Return all cached report metadata from PBIP _metadata folder."""
     try:
-        pbip_folder = request.args.get('pbipFolder') or r"D:\PBIP"
+        pbip_folder = resolve_pbip_folder(request.args.get('pbipFolder'))
         cache = load_metadata_cache(pbip_folder)
         return jsonify({'success': True, 'metadataCache': cache})
     except Exception as e:
@@ -1104,9 +1313,7 @@ def run_full_migration():
         if error:
             return jsonify({'success': False, 'error': error}), 400
 
-        pbip_folder = data.get('pbipFolder') if data else None
-        if not pbip_folder:
-            pbip_folder = r"D:\PBIP"
+        pbip_folder = resolve_pbip_folder(data.get('pbipFolder') if data else None)
 
         before_metadata, after_metadata = load_run_all_metadata(pbip_folder)
 
@@ -1141,6 +1348,195 @@ def save_report():
             'filePath': str(output_path),
             'message': 'Report saved successfully'
         })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/connectors/catalog', methods=['GET'])
+def connectors_catalog():
+    """Return supported connector catalog for migration planning."""
+    return jsonify({
+        'success': True,
+        'connectors': connector_registry.supported_types()
+    })
+
+
+@app.route('/api/connectors/detect', methods=['POST'])
+def detect_connectors():
+    """Detect connector type per table/query for multi-source reports."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        rows = resolve_request_rows(payload)
+        if not rows:
+            return jsonify({'success': False, 'error': 'No metadata rows found. Provide rows, reportName+pbipFolder, or metadataFilePath.'}), 400
+
+        result = classify_rows(rows)
+        write_audit_event('connectors_detect', {
+            'rows': len(rows),
+            'report': payload.get('reportName') or '',
+            'multi_source': result.get('summary', {}).get('is_multi_source', False),
+        })
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        write_audit_event('connectors_detect', {'status': 'failed', 'error': str(e)})
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/transform/preview', methods=['POST'])
+def transform_preview():
+    """Config-driven transformation preview for one query or multiple rows."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        source_type = payload.get('source_type') or 'Unknown'
+        target_type = payload.get('target_type') or ''
+        mapping = payload.get('mapping') or {}
+        rows = payload.get('rows') if isinstance(payload.get('rows'), list) else resolve_request_rows(payload)
+        query = payload.get('query') or ''
+
+        if not query and (not isinstance(rows, list) or len(rows) == 0):
+            return jsonify({'success': False, 'error': 'Provide query, rows, or report metadata lookup fields.'}), 400
+
+        pre = pre_validate_request({
+            'source_type': source_type,
+            'target_type': target_type,
+            'mapping': mapping,
+        })
+        if not pre.get('valid'):
+            return jsonify({'success': False, 'errors': pre.get('errors', []), 'warnings': pre.get('warnings', [])}), 400
+
+        if isinstance(rows, list):
+            transformed_rows = transformation_engine.transform_rows(rows, target_type, mapping)
+            detected_types = sorted(list(set(
+                row.get('detectedSourceType') or row.get('sourceConnectorType') or 'Unknown'
+                for row in transformed_rows
+            )))
+            write_audit_event('transform_preview_batch', {
+                'source_type': source_type,
+                'target_type': target_type,
+                'rows': len(transformed_rows),
+            })
+            return jsonify({
+                'success': True,
+                'detected_source_types': detected_types,
+                'target_type': target_type,
+                'rows': transformed_rows,
+                'warnings': pre.get('warnings', []),
+            })
+
+        req = TransformationRequest(
+            source_type=source_type,
+            target_type=target_type,
+            mapping=mapping,
+            query=query,
+        )
+        result = transformation_engine.transform_query(req)
+        post = post_validate_result({'transformed_query': result.transformed_query})
+        write_audit_event('transform_preview_single', {
+            'source_type': source_type,
+            'target_type': target_type,
+            'success': result.success,
+        })
+        return jsonify({
+            'success': result.success,
+            'detected_source_type': result.source_type,
+            'target_type': target_type,
+            'transformed_query': result.transformed_query,
+            'warnings': result.warnings + post.get('warnings', []),
+            'errors': result.errors + post.get('errors', []),
+        })
+    except Exception as e:
+        write_audit_event('transform_preview_single', {'status': 'failed', 'error': str(e)})
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/migration/validate', methods=['POST'])
+def validate_migration_request():
+    """Pre-validate migration request payload before running transformations."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        validation = pre_validate_request(payload)
+        return jsonify({'success': True, **validation})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/auth/validate', methods=['POST'])
+def validate_auth_payload():
+    """Validate auth payload without persisting secrets."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        auth_cfg = resolve_auth_config(payload)
+        check = validate_auth_config(auth_cfg)
+        return jsonify({'success': True, **check, 'auth_type': auth_cfg.get('auth_type')})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/migration/batch', methods=['POST'])
+def migration_batch():
+    """Batch processing endpoint for connector detection and transformation previews."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        items = payload.get('items') or []
+        operation = payload.get('operation') or 'detect'
+        target_type = payload.get('target_type') or ''
+        mapping = payload.get('mapping') or {}
+
+        if not isinstance(items, list) or len(items) == 0:
+            return jsonify({'success': False, 'error': 'items must be a non-empty list'}), 400
+
+        if operation not in {'detect', 'transform_preview'}:
+            return jsonify({'success': False, 'error': 'operation must be detect or transform_preview'}), 400
+
+        def _run(item):
+            rows = item.get('rows') or resolve_request_rows(item)
+            if operation == 'transform_preview':
+                return {
+                    'rows': transformation_engine.transform_rows(rows, target_type, mapping),
+                    'row_count': len(rows),
+                }
+            return classify_rows(rows)
+
+        result = run_batch(items, _run)
+        write_audit_event('batch_operation', {
+            'operation': operation,
+            'item_count': len(items),
+            'success': result.get('summary', {}).get('success', 0),
+            'failed': result.get('summary', {}).get('failed', 0),
+        })
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/migration/run', methods=['POST'])
+def run_connector_migration_flow():
+    """Run full migration service: extract -> detect -> transform -> validate."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        file_path = payload.get('file_path')
+        target_config = payload.get('target_config') or {}
+
+        result = full_migration_service.run_full_migration(file_path, target_config)
+        write_audit_event('migration_run', {
+            'file_path': file_path or '',
+            'target_type': (target_config or {}).get('target_type', ''),
+            'success': result.get('success', False),
+        })
+        status_code = 200 if result.get('success') else 400
+        return jsonify(result), status_code
+    except Exception as e:
+        write_audit_event('migration_run', {'status': 'failed', 'error': str(e)})
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/audit/events', methods=['GET'])
+def audit_events():
+    """Read latest migration audit trail events."""
+    try:
+        limit = int(request.args.get('limit', 200))
+        events = read_audit_events(limit=limit)
+        return jsonify({'success': True, 'events': events})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

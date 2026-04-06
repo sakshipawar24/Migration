@@ -1,1 +1,1 @@
-{"pbip_path": "D:\\PBIP\\Synapse 01 (Self-Serve)", "server": "dummy_server", "database": "dummy_database", "workspace_id": "dummy_workspace_id", "lakehouse_id": "dummy_lakehouse_id", "sql_query": "", "target_technology": "Fabric Lakehouse", "use_python": false}
+{"pbip_path": "D:\\PBIP\\customerfeedback", "server": "dummy_server", "database": "dummy_database", "workspace_id": "dummy_workspace_id", "lakehouse_id": "dummy_lakehouse_id", "sql_query": "", "target_technology": "Fabric Lakehouse", "use_python": false}

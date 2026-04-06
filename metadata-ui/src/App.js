@@ -194,6 +194,7 @@ function App() {
   const [pbixReports, setPbixReports] = useState([]);
   const [metadataBefore, setMetadataBefore] = useState(undefined);
   const [metadataAfter, setMetadataAfter] = useState(undefined);
+  const [migrationInsightsByReport, setMigrationInsightsByReport] = useState({});
   const [metadataCache, setMetadataCache] = useState({});
   const [reportTrackerStatus, setReportTrackerStatus] = useState({});
   const [changeConnectionReport, setChangeConnectionReport] = useState('');
@@ -587,6 +588,8 @@ function App() {
           return beforeData;
         });
         setMetadataAfter(afterData);
+        const analysisRows = beforeData.length > 0 ? beforeData : afterData;
+        runConnectorDetectionAndPreview(reportName, analysisRows);
         if ((data.before || []).length === 0 && (data.after || []).length === 0) {
           showStatus(`No metadata found for "${reportName}". Try running Full Flow first.`, 'info');
         }
@@ -648,6 +651,7 @@ function App() {
         }));
         setMetadataBefore(beforeData);
         setMetadataAfter([]);
+        runConnectorDetectionAndPreview(reportName, beforeData);
         if (beforeData.length === 0) {
           showStatus(`No metadata found for "${reportName}".`, 'info');
         }
@@ -665,6 +669,93 @@ function App() {
     setStatusMessage(message);
     setStatusType(type);
   };
+
+  const mapTargetTechnologyToConnector = useCallback((targetTechnology) => {
+    const value = String(targetTechnology || '').trim().toLowerCase();
+    if (value.includes('fabric')) {
+      return 'FabricLakehouse';
+    }
+    if (value.includes('synapse')) {
+      return 'Synapse';
+    }
+    if (value.includes('sql')) {
+      return 'Synapse';
+    }
+    return 'SQLServer';
+  }, []);
+
+  const runConnectorDetectionAndPreview = useCallback(async (reportName, rows) => {
+    if (!reportName || !Array.isArray(rows) || rows.length === 0) {
+      return;
+    }
+
+    try {
+      const detectResponse = await fetch('http://localhost:5000/api/connectors/detect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows })
+      });
+      const detectData = await detectResponse.json();
+      if (!detectData.success) {
+        setMigrationInsightsByReport((prev) => ({
+          ...prev,
+          [reportName]: {
+            detected: null,
+            previewRows: [],
+            warnings: [],
+            errors: [detectData.error || 'Connector detection failed']
+          }
+        }));
+        return;
+      }
+
+      const connectors = detectData?.summary?.connectors || {};
+      const rankedConnector = Object.entries(connectors)
+        .sort((left, right) => Number(right[1]) - Number(left[1]))
+        .find(([key]) => key !== 'Unknown');
+      const sourceType = rankedConnector ? rankedConnector[0] : 'Unknown';
+
+      const targetType = mapTargetTechnologyToConnector(autoTargetTechnology);
+      const mapping = {
+        server: autoServer,
+        database: autoDatabase,
+        workspace_id: autoWorkspaceId,
+        lakehouse_id: autoLakehouseId
+      };
+
+      const previewResponse = await fetch('http://localhost:5000/api/transform/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_type: sourceType,
+          target_type: targetType,
+          mapping,
+          rows
+        })
+      });
+      const previewData = await previewResponse.json();
+
+      setMigrationInsightsByReport((prev) => ({
+        ...prev,
+        [reportName]: {
+          detected: detectData,
+          previewRows: Array.isArray(previewData.rows) ? previewData.rows : [],
+          warnings: previewData.warnings || [],
+          errors: previewData.errors || []
+        }
+      }));
+    } catch (error) {
+      setMigrationInsightsByReport((prev) => ({
+        ...prev,
+        [reportName]: {
+          detected: null,
+          previewRows: [],
+          warnings: [],
+          errors: [error.message || 'Migration preview failed']
+        }
+      }));
+    }
+  }, [autoDatabase, autoLakehouseId, autoServer, autoTargetTechnology, autoWorkspaceId, mapTargetTechnologyToConnector]);
 
   const saveAuthConfig = async () => {
     if (!tenantId || !clientId || !clientSecret) {
@@ -803,6 +894,14 @@ function App() {
   };
 
   const publishPbix = async () => {
+    const pendingReports = getPendingReportNames('publishStatus');
+    if (pendingReports.length === 0) {
+      showStatus('All reports are already published. Nothing remaining.', 'info');
+      setPublishStatus('success');
+      setPublishNote('All reports already published.');
+      return;
+    }
+
     setPublishStatus('running');
     setPublishNote('Publishing in progress.');
     setBusyAction('publish');
@@ -814,6 +913,7 @@ function App() {
           sourceWorkspaceId: sourceWorkspaceId || undefined,
           targetWorkspaceId: targetWorkspaceId || undefined,
           pbixFolder,
+          reportNames: pendingReports,
           tenantId,
           clientId,
           clientSecret
@@ -824,7 +924,7 @@ function App() {
         showStatus('Publish completed.', 'success');
         setPublishStatus('success');
         setPublishNote(data.message || 'Publish completed.');
-        markTrackerStatusForReports(knownReportNames, 'publishStatus', 'Success');
+        markTrackerStatusForReports(pendingReports, 'publishStatus', 'Success');
       } else {
         showStatus(data.error || 'Publish failed.', 'error');
         setPublishStatus('error');
@@ -845,6 +945,14 @@ function App() {
       return;
     }
 
+    const pendingReports = getPendingReportNames('refreshStatus');
+    if (pendingReports.length === 0) {
+      showStatus('All reports are already refreshed. Nothing remaining.', 'info');
+      setRefreshStatus('success');
+      setRefreshNote('All reports already refreshed.');
+      return;
+    }
+
     setRefreshStatus('running');
     setRefreshNote('Refreshing in progress.');
     setBusyAction('refresh');
@@ -856,6 +964,7 @@ function App() {
           sourceWorkspaceId: sourceWorkspaceId || undefined,
           targetWorkspaceId,
           pbixFolder,
+          reportNames: pendingReports,
           tenantId,
           clientId,
           clientSecret
@@ -866,7 +975,7 @@ function App() {
         showStatus('Refresh triggered.', 'success');
         setRefreshStatus('success');
         setRefreshNote(data.message || 'Refresh triggered.');
-        markTrackerStatusForReports(knownReportNames, 'refreshStatus', 'Success');
+        markTrackerStatusForReports(pendingReports, 'refreshStatus', 'Success');
       } else {
         showStatus(data.error || 'Refresh failed.', 'error');
         setRefreshStatus('error');
@@ -1118,6 +1227,13 @@ const changeConnection = async (reportName = null) => {
     return Array.from(names);
   }, [metadataCache, pbipReports, pbixReports]);
 
+  const getPendingReportNames = useCallback((statusField) => {
+    return knownReportNames.filter((name) => {
+      const entry = reportTrackerStatus[normalizeReportKey(name)] || {};
+      return entry[statusField] !== 'Success';
+    });
+  }, [knownReportNames, reportTrackerStatus]);
+
   const markTrackerStatusForReports = useCallback((reportNames, field, value) => {
     const keys = (reportNames || [])
       .map((name) => normalizeReportKey(name))
@@ -1342,10 +1458,18 @@ const changeConnection = async (reportName = null) => {
     });
 
     const rows = Array.from(reportMap.values()).map((reportRow) => {
+      const trackerKey = normalizeReportKey(reportRow.reportName || reportRow.displayName);
+      const trackerEntry = reportTrackerStatus[trackerKey] || {};
+
+      const persistedBeforeCount = Number.parseInt(trackerEntry.metadataBeforeCount, 10) || 0;
+      const persistedAfterCount = Number.parseInt(trackerEntry.metadataAfterCount, 10) || 0;
+      const metadataBeforeCount = Math.max(reportRow.metadataBeforeCount || 0, persistedBeforeCount);
+      const metadataAfterCount = Math.max(reportRow.metadataAfterCount || 0, persistedAfterCount);
+
       let workflowStatus = 'Detected';
-      if (reportRow.metadataAfterCount > 0) {
+      if (metadataAfterCount > 0) {
         workflowStatus = 'Connection updated';
-      } else if (reportRow.metadataBeforeCount > 0) {
+      } else if (metadataBeforeCount > 0) {
         workflowStatus = 'Metadata extracted';
       } else if (reportRow.converted) {
         workflowStatus = 'Converted';
@@ -1353,15 +1477,26 @@ const changeConnection = async (reportName = null) => {
         workflowStatus = 'Downloaded';
       }
 
-      const metrics = computeReportMetrics(reportRow.reportName || reportRow.displayName);
-      const complexity = getComplexityLabel(metrics);
+      const liveMetrics = computeReportMetrics(reportRow.reportName || reportRow.displayName);
+      const persistedMetrics = {
+        tableCount: Number.parseInt(trackerEntry.tableCount, 10) || 0,
+        connectionCount: Number.parseInt(trackerEntry.connectionCount, 10) || 0,
+        sqlQueryCount: Number.parseInt(trackerEntry.sqlQueryCount, 10) || 0
+      };
+
+      const hasLiveMetrics = (liveMetrics.tableCount + liveMetrics.connectionCount + liveMetrics.sqlQueryCount) > 0;
+      const hasPersistedMetrics = (persistedMetrics.tableCount + persistedMetrics.connectionCount + persistedMetrics.sqlQueryCount) > 0;
+      const metrics = hasLiveMetrics ? liveMetrics : (hasPersistedMetrics ? persistedMetrics : liveMetrics);
+      const complexity = (hasLiveMetrics || hasPersistedMetrics)
+        ? getComplexityLabel(metrics)
+        : (trackerEntry.complexity || getComplexityLabel(metrics));
 
       const validationIssues = [];
-      const shouldValidate = reportRow.converted || reportRow.metadataBeforeCount > 0 || reportRow.metadataAfterCount > 0;
+      const shouldValidate = reportRow.converted || metadataBeforeCount > 0 || metadataAfterCount > 0;
       if (shouldValidate && metrics.tableCount === 0) {
         validationIssues.push('No table metadata');
       }
-      if (reportRow.metadataBeforeCount > 0 && metrics.connectionCount === 0) {
+      if (metadataBeforeCount > 0 && metrics.connectionCount === 0) {
         validationIssues.push('No connection details parsed');
       }
 
@@ -1370,28 +1505,13 @@ const changeConnection = async (reportName = null) => {
         ? `${workflowStatus} | ${complexity} complexity`
         : `${workflowStatus} | ${complexity} complexity | Validate: ${validationIssues.join('; ')}`;
 
-      const trackerEntry = reportTrackerStatus[normalizeReportKey(reportRow.reportName || reportRow.displayName)] || {};
-      let trackerPublishStatus = trackerEntry.publishStatus || 'Not started';
-      let trackerRefreshStatus = trackerEntry.refreshStatus || 'Not started';
-
-      if (publishStatus === 'running') {
-        trackerPublishStatus = 'Running';
-      } else if (publishStatus === 'success') {
-        trackerPublishStatus = 'Success';
-      } else if (publishStatus === 'error' && !trackerEntry.publishStatus) {
-        trackerPublishStatus = 'Error';
-      }
-
-      if (refreshStatus === 'running') {
-        trackerRefreshStatus = 'Running';
-      } else if (refreshStatus === 'success') {
-        trackerRefreshStatus = 'Success';
-      } else if (refreshStatus === 'error' && !trackerEntry.refreshStatus) {
-        trackerRefreshStatus = 'Error';
-      }
+      const trackerPublishStatus = trackerEntry.publishStatus || 'Not started';
+      const trackerRefreshStatus = trackerEntry.refreshStatus || 'Not started';
 
       return {
         ...reportRow,
+        metadataBeforeCount,
+        metadataAfterCount,
         tableCount: metrics.tableCount,
         connectionCount: metrics.connectionCount,
         sqlQueryCount: metrics.sqlQueryCount,
@@ -1411,10 +1531,52 @@ const changeConnection = async (reportName = null) => {
     metadataCache,
     pbipReports,
     pbixReports,
-    publishStatus,
-    refreshStatus,
     reportTrackerStatus
   ]);
+
+  useEffect(() => {
+    if (!isStorageHydrated || reportStatusRows.length === 0) {
+      return;
+    }
+
+    setReportTrackerStatus((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      reportStatusRows.forEach((row) => {
+        const key = normalizeReportKey(row.reportName || row.displayName);
+        if (!key) {
+          return;
+        }
+
+        const existing = next[key] || {};
+        const merged = {
+          ...existing,
+          metadataBeforeCount: Math.max(Number.parseInt(existing.metadataBeforeCount, 10) || 0, row.metadataBeforeCount || 0),
+          metadataAfterCount: Math.max(Number.parseInt(existing.metadataAfterCount, 10) || 0, row.metadataAfterCount || 0),
+          tableCount: Math.max(Number.parseInt(existing.tableCount, 10) || 0, row.tableCount || 0),
+          connectionCount: Math.max(Number.parseInt(existing.connectionCount, 10) || 0, row.connectionCount || 0),
+          sqlQueryCount: Math.max(Number.parseInt(existing.sqlQueryCount, 10) || 0, row.sqlQueryCount || 0),
+          complexity: row.complexity || existing.complexity || 'Low'
+        };
+
+        const hasDelta =
+          merged.metadataBeforeCount !== existing.metadataBeforeCount ||
+          merged.metadataAfterCount !== existing.metadataAfterCount ||
+          merged.tableCount !== existing.tableCount ||
+          merged.connectionCount !== existing.connectionCount ||
+          merged.sqlQueryCount !== existing.sqlQueryCount ||
+          merged.complexity !== existing.complexity;
+
+        if (hasDelta) {
+          next[key] = merged;
+          changed = true;
+        }
+      });
+
+      return changed ? next : prev;
+    });
+  }, [isStorageHydrated, reportStatusRows]);
 
   const formatStatusLabel = (status) => {
     if (status === 'running') {
@@ -2073,6 +2235,7 @@ const changeConnection = async (reportName = null) => {
               pbixReports={pbixReports}
               metadataBefore={metadataBefore}
               metadataAfter={metadataAfter}
+              migrationInsights={migrationInsightsByReport[selectedReport] || null}
               statusMessage={statusMessage}
               statusType={statusType}
               targetTechnology={autoTargetTechnology}

@@ -17,9 +17,45 @@ param(
     [Parameter()][string]$Database = "dummy_database",
     [Parameter()][string]$WorkspaceId = "dummy_workspace_id",
     [Parameter()][string]$LakehouseId = "dummy_lakehouse_id",
+    [Parameter()][string]$ReportNames = "",
     [Parameter()][switch]$UsePython,
     [Parameter()][ValidateSet('download','convert','publish','refresh','all')][string]$Action = "all"
 )
+
+function ConvertTo-ReportNameKey {
+    param([string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return ""
+    }
+
+    $value = $Name.Trim()
+    if ($value.ToLower().EndsWith(".pbix")) {
+        $value = $value.Substring(0, $value.Length - 5)
+    }
+    return $value.ToLower()
+}
+
+$SelectedReportSet = @{}
+if (-not [string]::IsNullOrWhiteSpace($ReportNames)) {
+    $ReportNames -split '\|' | ForEach-Object {
+        $normalized = ConvertTo-ReportNameKey $_
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            $SelectedReportSet[$normalized] = $true
+        }
+    }
+}
+
+function Test-ReportSelection {
+    param([string]$Name)
+
+    if ($SelectedReportSet.Count -eq 0) {
+        return $true
+    }
+
+    $normalized = ConvertTo-ReportNameKey $Name
+    return $SelectedReportSet.ContainsKey($normalized)
+}
 
 if ([string]::IsNullOrWhiteSpace($TenantId) -or [string]::IsNullOrWhiteSpace($ClientId) -or [string]::IsNullOrWhiteSpace($ClientSecret)) {
     throw "TenantId, ClientId, and ClientSecret are required."
@@ -177,6 +213,11 @@ if ($Action -eq "publish" -or $Action -eq "all") {
 
     Get-ChildItem "$PbixFolder\*.pbix" | ForEach-Object {
 
+        if (-not (Test-ReportSelection $_.BaseName)) {
+            Write-Host "Skipping $($_.Name) (already completed)."
+            return
+        }
+
         $name = $_.Name
         Write-Host "Publishing $name..."
 
@@ -216,6 +257,11 @@ if ($Action -eq "refresh" -or $Action -eq "all") {
         -Headers $headers
 
     foreach ($d in $datasets.value) {
+
+        if (-not (Test-ReportSelection $d.name)) {
+            Write-Host "Skipping $($d.name) (already completed)."
+            continue
+        }
 
         Write-Host "Refreshing $($d.name)..."
 

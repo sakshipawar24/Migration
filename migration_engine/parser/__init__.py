@@ -1,0 +1,1 @@
+"""M query parser package."""
