@@ -2650,6 +2650,10 @@ body {
   box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3);
 }
 
+.summary-email-input {
+  min-width: 240px;
+}
+
 .download-buttons-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

@@ -67,10 +67,26 @@ async function updateTableConnections(tablesDir, server, database) {
 
     const filePath = path.join(tablesDir, file);
     const content = await fs.promises.readFile(filePath, "utf8");
-    const updated = content.replace(
-      /Sql\.Database\s*\(\s*\"[^\"]+\"\s*,\s*\"[^\"]+\"/gi,
+    const sqlDbMatches = [
+      ...content.matchAll(/Sql\.Database\s*\(\s*(?:\"[^\"]*\"|[^,\)\r\n]+)\s*,\s*\"([^\"]+)\"/gi)
+    ];
+    const originalDatabases = [...new Set(sqlDbMatches.map((match) => match[1]).filter(Boolean))];
+
+    // Rewrite first two Sql.Database args whether they are string literals or parameters.
+    let updated = content.replace(
+      /Sql\.Database\s*\(\s*(?:\"[^\"]*\"|[^,\)\r\n]+)\s*,\s*(?:\"[^\"]*\"|[^,\)\r\n]+)/gi,
       `Sql.Database("${server}", "${database}"`
     );
+
+    for (const oldDatabase of originalDatabases) {
+      if (oldDatabase.toLowerCase() === String(database).toLowerCase()) {
+        continue;
+      }
+      updated = replaceDatabaseInQueryLiterals(updated, oldDatabase, database);
+    }
+
+    updated = replaceGenericDatabaseConnectorCalls(updated, server, database);
+    updated = replaceFabricIds(updated, server, database);
 
     if (updated !== content) {
       await fs.promises.writeFile(filePath, updated, "utf8");
@@ -79,6 +95,38 @@ async function updateTableConnections(tablesDir, server, database) {
   }
 
   return updatedCount;
+}
+
+function replaceGenericDatabaseConnectorCalls(content, server, database) {
+  // Handles Sql/Oracle/PostgreSQL/MySql/etc calls shaped as <Connector>.Database(arg1, arg2, ...)
+  return content.replace(
+    /(\b[A-Za-z][\w.]*)\.Database\s*\(\s*(?:\"[^\"]*\"|[^,\)\r\n]+)\s*,\s*(?:\"[^\"]*\"|[^,\)\r\n]+)/gi,
+    (_, connector) => `${connector}.Database("${server}", "${database}"`
+  );
+}
+
+function replaceFabricIds(content, server, database) {
+  // Keep Fabric connector shape but map identifiers to requested values.
+  return content
+    .replace(/(WorkspaceId\s*=\s*\")([^\"]*)(\")/gi, `$1${server}$3`)
+    .replace(/(LakehouseId\s*=\s*\")([^\"]*)(\")/gi, `$1${database}$3`);
+}
+
+function replaceDatabaseInQueryLiterals(content, oldDatabase, newDatabase) {
+  const escapedOld = escapeRegExp(oldDatabase);
+  const bracketedDb = new RegExp(`\\[${escapedOld}\\]`, "gi");
+  const qualifiedDb = new RegExp(`\\b${escapedOld}\\b(?=\\s*\\.)`, "gi");
+
+  return content.replace(/(Query\s*=\s*\")((?:[^\"]|\"\")*)(\")/gi, (full, prefix, queryBody, suffix) => {
+    const replacedBody = queryBody
+      .replace(bracketedDb, `[${newDatabase}]`)
+      .replace(qualifiedDb, newDatabase);
+    return `${prefix}${replacedBody}${suffix}`;
+  });
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 module.exports = {

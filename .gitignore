@@ -38,3 +38,8 @@ yarn-debug.log*
 yarn-error.log*
 
 # Keep only necessary files
+
+# Local secrets/state
+.env
+.env.*
+app_state.json

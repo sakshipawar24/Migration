@@ -58,12 +58,22 @@ def extract_m_query(content: str) -> str:
     capture = False
     buffer = []
     for line in lines:
-        trimmed = line.strip().lower()
-        if trimmed == "source =":
+        trimmed = line.strip()
+        lower = trimmed.lower()
+        if not capture and lower.startswith("source"):
+            import re
+            match = re.match(r"^source\s*=\s*(.*)$", trimmed, re.IGNORECASE)
+            if match:
+                capture = True
+                inline_expression = (match.group(1) or "").strip()
+                if inline_expression:
+                    buffer.append(inline_expression)
+                continue
+        if lower == "source =":
             capture = True
             continue
         if capture:
-            if trimmed.startswith("annotation"):
+            if lower.startswith("annotation"):
                 break
             buffer.append(line)
     return "\n".join(buffer).strip()
@@ -86,11 +96,32 @@ def extract_connection_details(m_query: str):
     if sql_match:
         return sql_match.group(1), sql_match.group(2)
 
+    sql_param_match = re.search(r'Sql\.Database\s*\(\s*([^,\)\r\n]+)\s*,\s*([^,\)\r\n]+)', m_query, re.IGNORECASE)
+    if sql_param_match:
+        return normalize_sql_arg(sql_param_match.group(1)), normalize_sql_arg(sql_param_match.group(2))
+
     lakehouse_match = re.search(r'WorkspaceId\s*=\s*\"([^\"]+)\"[\s\S]*?LakehouseId\s*=\s*\"([^\"]+)\"', m_query, re.IGNORECASE)
     if lakehouse_match:
         return lakehouse_match.group(1), lakehouse_match.group(2)
 
     return "", ""
+
+
+def normalize_sql_arg(value: str) -> str:
+    token = (value or "").strip()
+    if not token:
+        return ""
+
+    import re
+    hash_quoted = re.match(r'^#"([^"]+)"$', token)
+    if hash_quoted:
+        return hash_quoted.group(1).strip()
+
+    quoted = re.match(r'^["\'](.+)["\']$', token)
+    if quoted:
+        return quoted.group(1).strip()
+
+    return token
 
 
 def parse_storage_mode(content: str) -> str:

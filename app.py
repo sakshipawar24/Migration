@@ -10,11 +10,95 @@ import re
 import os
 import subprocess
 import json
+import smtplib
+import base64
+import urllib.parse
+import urllib.request
+import urllib.error
 from pathlib import Path
 from werkzeug.utils import secure_filename
 import shutil
 import zipfile
 import tempfile
+from datetime import datetime
+from email.message import EmailMessage
+
+
+STATE_FILE = Path('app_state.json')
+
+
+def _default_app_state():
+    return {
+        'pbip_path': None,
+        'workspace_name': None,
+        'target_system': None,
+        'before_metadata': [],
+        'after_metadata': [],
+        'pbix_output_path': None,
+        'pbip_output_path': None,
+        'pbi_tenant_id': None,
+        'pbi_client_id': None,
+        'pbi_client_secret': None,
+        'pbi_source_workspace_id': None,
+        'pbi_target_workspace_id': None,
+        'pbi_pbix_folder': None
+    }
+
+
+def load_persisted_app_state():
+    if not STATE_FILE.exists():
+        return _default_app_state()
+
+    try:
+        raw = json.loads(STATE_FILE.read_text(encoding='utf-8'))
+        if not isinstance(raw, dict):
+            return _default_app_state()
+
+        state = _default_app_state()
+        for key in state.keys():
+            if key in raw:
+                state[key] = raw.get(key)
+        return state
+    except Exception:
+        return _default_app_state()
+
+
+def persist_app_state():
+    try:
+        STATE_FILE.write_text(json.dumps(app_state, indent=2), encoding='utf-8')
+    except Exception as err:
+        print(f"Warning: Failed to persist app state: {err}")
+
+
+def load_env_file(env_path='.env'):
+    """Load simple KEY=VALUE pairs from a .env file into process env.
+    Existing non-empty environment variables are not overwritten.
+    """
+    path = Path(env_path)
+    if not path.exists() or not path.is_file():
+        return
+
+    for raw_line in path.read_text(encoding='utf-8').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip()
+
+        if not key:
+            continue
+
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+
+        current = os.environ.get(key)
+        if current is None or str(current).strip() == '':
+            os.environ[key] = value
+
+
+load_env_file()
 
 app = Flask(__name__, static_folder='metadata-ui/build')
 CORS(app)
@@ -25,21 +109,7 @@ UPLOAD_FOLDER.mkdir(exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # State storage
-app_state = {
-    'pbip_path': None,
-    'workspace_name': None,
-    'target_system': None,
-    'before_metadata': [],
-    'after_metadata': [],
-    'pbix_output_path': None,
-    'pbip_output_path': None,
-    'pbi_tenant_id': None,
-    'pbi_client_id': None,
-    'pbi_client_secret': None,
-    'pbi_source_workspace_id': None,
-    'pbi_target_workspace_id': None,
-    'pbi_pbix_folder': None
-}
+app_state = load_persisted_app_state()
 
 POWER_BI_SCRIPT = Path('automation') / 'Run-Migration.ps1'
 PBI_TOOLS_PATH = Path(r"C:\Tools\pbi-tools\pbi-tools.exe")
@@ -166,6 +236,39 @@ def load_run_all_metadata(pbip_folder):
     return before_rows, after_rows
 
 
+def load_metadata_cache(pbip_folder):
+    metadata_dir = Path(pbip_folder) / '_metadata'
+    if not metadata_dir.exists():
+        return {}
+
+    cache = {}
+    for metadata_file in metadata_dir.glob('*.json'):
+        try:
+            report_name = normalize_report_name(metadata_file.stem)
+            payload = json.loads(metadata_file.read_text(encoding='utf-8'))
+            before_rows = payload.get('before', []) or []
+            after_rows = payload.get('after', []) or []
+
+            for row in before_rows:
+                row['reportName'] = report_name
+                row['reportDisplay'] = report_name
+                normalize_connector_fields(row)
+
+            for row in after_rows:
+                row['reportName'] = report_name
+                row['reportDisplay'] = report_name
+                normalize_connector_fields(row)
+
+            cache[report_name] = {
+                'before': before_rows,
+                'after': after_rows
+            }
+        except Exception:
+            continue
+
+    return cache
+
+
 def normalize_report_name(report_name):
     if not report_name:
         return ''
@@ -212,7 +315,52 @@ def normalize_connector_fields(row):
         row['source'] = 'Databricks'
         row['connectionType'] = 'Databricks'
 
+    server, database = extract_connection_details_from_m_query(m_query)
+    if server and not row.get('server'):
+        row['server'] = server
+    if database and not row.get('database'):
+        row['database'] = database
+
     return row
+
+
+def extract_connection_details_from_m_query(m_query):
+    if not m_query:
+        return '', ''
+
+    sql_match = re.search(r'Sql\.Database\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"', m_query, re.IGNORECASE)
+    if sql_match:
+        return sql_match.group(1), sql_match.group(2)
+
+    sql_param_match = re.search(r'Sql\.Database\s*\(\s*([^,\)\r\n]+)\s*,\s*([^,\)\r\n]+)', m_query, re.IGNORECASE)
+    if sql_param_match:
+        return normalize_sql_arg(sql_param_match.group(1)), normalize_sql_arg(sql_param_match.group(2))
+
+    lakehouse_match = re.search(
+        r'WorkspaceId\s*=\s*"([^"]+)"[\s\S]*?LakehouseId\s*=\s*"([^"]+)"',
+        m_query,
+        re.IGNORECASE
+    )
+    if lakehouse_match:
+        return lakehouse_match.group(1), lakehouse_match.group(2)
+
+    return '', ''
+
+
+def normalize_sql_arg(value):
+    token = str(value or '').strip()
+    if not token:
+        return ''
+
+    hash_quoted = re.match(r'^#"([^"]+)"$', token)
+    if hash_quoted:
+        return hash_quoted.group(1).strip()
+
+    quoted = re.match(r'^["\'](.+)["\']$', token)
+    if quoted:
+        return quoted.group(1).strip()
+
+    return token
 
 
 def resolve_semantic_model_path(pbip_path: Path):
@@ -264,6 +412,196 @@ def run_node_script(script_path, args=None, timeout=300):
         timeout=timeout
     )
     return result
+
+
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def send_email_via_graph(recipient_email, subject, attachment_content, attachment_filename):
+    graph_tenant_id = os.environ.get('GRAPH_TENANT_ID') or app_state.get('pbi_tenant_id') or os.environ.get('POWERBI_TENANT_ID')
+    graph_client_id = os.environ.get('GRAPH_CLIENT_ID') or app_state.get('pbi_client_id') or os.environ.get('POWERBI_CLIENT_ID')
+    graph_client_secret = os.environ.get('GRAPH_CLIENT_SECRET') or app_state.get('pbi_client_secret') or os.environ.get('POWERBI_CLIENT_SECRET')
+    graph_sender_email = os.environ.get('GRAPH_SENDER_EMAIL') or os.environ.get('SMTP_FROM_EMAIL')
+    graph_sender_user_id = os.environ.get('GRAPH_SENDER_USER_ID')
+
+    if not graph_tenant_id:
+        raise ValueError('GRAPH_TENANT_ID is required for Graph email mode.')
+    if not graph_client_id:
+        raise ValueError('GRAPH_CLIENT_ID is required for Graph email mode.')
+    if not graph_client_secret:
+        raise ValueError('GRAPH_CLIENT_SECRET is required for Graph email mode.')
+    if not graph_sender_email and not graph_sender_user_id:
+        raise ValueError('Set GRAPH_SENDER_USER_ID or GRAPH_SENDER_EMAIL (or SMTP_FROM_EMAIL) for Graph email mode.')
+
+    token_url = f'https://login.microsoftonline.com/{graph_tenant_id}/oauth2/v2.0/token'
+    token_payload = urllib.parse.urlencode({
+        'client_id': graph_client_id,
+        'client_secret': graph_client_secret,
+        'grant_type': 'client_credentials',
+        'scope': 'https://graph.microsoft.com/.default'
+    }).encode('utf-8')
+
+    token_request = urllib.request.Request(
+        token_url,
+        data=token_payload,
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        method='POST'
+    )
+
+    try:
+        with urllib.request.urlopen(token_request, timeout=30) as response:
+            token_data = json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as error:
+        error_body = error.read().decode('utf-8', errors='ignore')
+        raise ValueError(f'Graph token request failed: {error_body}')
+
+    access_token = token_data.get('access_token')
+    if not access_token:
+        raise ValueError('Graph token response did not include access_token.')
+
+    attachment_b64 = base64.b64encode(attachment_content.encode('utf-8')).decode('ascii')
+    graph_message = {
+        'message': {
+            'subject': subject,
+            'body': {
+                'contentType': 'Text',
+                'content': 'Please find the migration summary attached.'
+            },
+            'toRecipients': [
+                {
+                    'emailAddress': {
+                        'address': recipient_email
+                    }
+                }
+            ],
+            'attachments': [
+                {
+                    '@odata.type': '#microsoft.graph.fileAttachment',
+                    'name': attachment_filename,
+                    'contentType': 'text/plain',
+                    'contentBytes': attachment_b64
+                }
+            ]
+        },
+        'saveToSentItems': True
+    }
+
+    sender_locator = graph_sender_user_id or graph_sender_email
+    send_mail_url = f'https://graph.microsoft.com/v1.0/users/{urllib.parse.quote(sender_locator)}/sendMail'
+    send_request = urllib.request.Request(
+        send_mail_url,
+        data=json.dumps(graph_message).encode('utf-8'),
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {access_token}'
+        },
+        method='POST'
+    )
+
+    try:
+        with urllib.request.urlopen(send_request, timeout=30):
+            return
+    except urllib.error.HTTPError as error:
+        error_body = error.read().decode('utf-8', errors='ignore')
+        if 'ErrorInvalidUser' in error_body:
+            raise ValueError(
+                'Graph sender is invalid for this tenant. Use GRAPH_SENDER_USER_ID (object ID) '
+                'or a tenant mailbox UPN in GRAPH_SENDER_EMAIL.'
+            )
+        raise ValueError(f'Graph sendMail failed: {error_body}')
+
+
+def send_email_via_webhook(recipient_email, subject, attachment_content, attachment_filename):
+    webhook_url = os.environ.get('EMAIL_WEBHOOK_URL')
+    if not webhook_url:
+        raise ValueError('EMAIL_WEBHOOK_URL is required for webhook email mode.')
+
+    payload = {
+        'recipientEmail': recipient_email,
+        'subject': subject,
+        'summaryContent': attachment_content,
+        'fileName': attachment_filename
+    }
+
+    webhook_request = urllib.request.Request(
+        webhook_url,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'},
+        method='POST'
+    )
+
+    try:
+        with urllib.request.urlopen(webhook_request, timeout=30):
+            return
+    except urllib.error.HTTPError as error:
+        error_body = error.read().decode('utf-8', errors='ignore')
+        raise ValueError(f'Webhook email request failed: {error_body}')
+
+
+def send_email_smtp(recipient_email, subject, attachment_content, attachment_filename):
+    smtp_host = os.environ.get('SMTP_HOST')
+    smtp_port = int(os.environ.get('SMTP_PORT', '587'))
+    smtp_user = os.environ.get('SMTP_USERNAME')
+    smtp_password = os.environ.get('SMTP_PASSWORD')
+    smtp_from = os.environ.get('SMTP_FROM_EMAIL') or smtp_user
+    smtp_use_tls = env_flag('SMTP_USE_TLS', default=True)
+
+    if not smtp_host:
+        raise ValueError('SMTP_HOST is not configured. Set SMTP_HOST in environment or .env, then restart backend.')
+    if not smtp_from:
+        raise ValueError('SMTP_FROM_EMAIL or SMTP_USERNAME is required. Set one of them in environment or .env, then restart backend.')
+
+    message = EmailMessage()
+    message['Subject'] = subject
+    message['From'] = smtp_from
+    message['To'] = recipient_email
+    message.set_content('Please find the migration summary attached.')
+    message.add_attachment(
+        attachment_content.encode('utf-8'),
+        maintype='text',
+        subtype='plain',
+        filename=attachment_filename
+    )
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as smtp:
+        if smtp_use_tls:
+            smtp.starttls()
+        if smtp_user and smtp_password:
+            smtp.login(smtp_user, smtp_password)
+        smtp.send_message(message)
+
+
+def send_email_with_attachment(recipient_email, subject, attachment_content, attachment_filename):
+    provider = (os.environ.get('EMAIL_PROVIDER') or 'smtp').strip().lower()
+
+    if provider in {'graph', 'microsoft-graph'}:
+        send_email_via_graph(recipient_email, subject, attachment_content, attachment_filename)
+        return
+
+    if provider == 'webhook':
+        send_email_via_webhook(recipient_email, subject, attachment_content, attachment_filename)
+        return
+
+    if provider == 'auto':
+        try:
+            send_email_smtp(recipient_email, subject, attachment_content, attachment_filename)
+            return
+        except smtplib.SMTPAuthenticationError as smtp_error:
+            error_text = str(smtp_error).lower()
+            if 'basic authentication is disabled' in error_text:
+                try:
+                    send_email_via_graph(recipient_email, subject, attachment_content, attachment_filename)
+                    return
+                except Exception:
+                    send_email_via_webhook(recipient_email, subject, attachment_content, attachment_filename)
+                    return
+            raise
+
+    send_email_smtp(recipient_email, subject, attachment_content, attachment_filename)
 
 
 @app.route('/api/upload-pbip', methods=['POST'])
@@ -329,6 +667,7 @@ def upload_pbip():
         app_state['pbip_path'] = pbip_root
         app_state['workspace_name'] = workspace_name
         app_state['target_system'] = target_system
+        persist_app_state()
         
         return jsonify({
             'success': True,
@@ -369,6 +708,7 @@ def convert_pbip():
 
         app_state['before_metadata'] = before_metadata
         app_state['pbip_path'] = pbip_path
+        persist_app_state()
 
         # Persist before metadata for future view-only loads
         pbip_report_path = Path(pbip_path)
@@ -490,6 +830,7 @@ def change_connection():
                 row['reportName'] = report_name
                 row['reportDisplay'] = report_name
                 row['name'] = f"{report_name}::{row_name}" if row_name else report_name
+                normalize_connector_fields(row)
             for row in after_metadata:
                 row_name = row.get('name') or ''
                 row['reportName'] = report_name
@@ -512,6 +853,7 @@ def change_connection():
 
         app_state['before_metadata'] = before_metadata
         app_state['after_metadata'] = after_metadata
+        persist_app_state()
 
         return jsonify({
             'success': True,
@@ -615,10 +957,28 @@ def set_power_bi_config():
             app_state['pbi_target_workspace_id'] = target_workspace_id
         if pbix_folder:
             app_state['pbi_pbix_folder'] = pbix_folder
+        persist_app_state()
 
         return jsonify({
             'success': True,
             'message': 'Power BI settings stored for this session'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/pbi/config', methods=['GET'])
+def get_power_bi_config_state():
+    """Get saved Power BI credentials and workspace settings."""
+    try:
+        return jsonify({
+            'success': True,
+            'tenantId': app_state.get('pbi_tenant_id') or '',
+            'clientId': app_state.get('pbi_client_id') or '',
+            'clientSecret': app_state.get('pbi_client_secret') or '',
+            'sourceWorkspaceId': app_state.get('pbi_source_workspace_id') or '',
+            'targetWorkspaceId': app_state.get('pbi_target_workspace_id') or '',
+            'pbixFolder': app_state.get('pbi_pbix_folder') or r'D:\PBIX'
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -807,6 +1167,7 @@ def extract_report_metadata():
                         for row in before:
                             row['reportName'] = report_name
                             row['reportDisplay'] = report_name
+                            normalize_connector_fields(row)
                         for row in after:
                             row['reportName'] = report_name
                             row['reportDisplay'] = report_name
@@ -896,6 +1257,17 @@ def extract_report_metadata():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/pbi/metadata-cache', methods=['GET'])
+def get_metadata_cache():
+    """Return all cached report metadata from PBIP _metadata folder."""
+    try:
+        pbip_folder = request.args.get('pbipFolder') or r"D:\PBIP"
+        cache = load_metadata_cache(pbip_folder)
+        return jsonify({'success': True, 'metadataCache': cache})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/pbi/run-all', methods=['POST'])
 def run_full_migration():
     """Run download -> publish -> refresh"""
@@ -920,6 +1292,57 @@ def run_full_migration():
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/save-report', methods=['POST'])
+def save_report():
+    """Save generated report content to the backend working directory."""
+    try:
+        data = request.get_json(silent=True) or {}
+        content = data.get('content', '')
+        raw_filename = data.get('filename') or f"report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
+        filename = secure_filename(raw_filename)
+
+        if not filename:
+            return jsonify({'success': False, 'error': 'Invalid filename'}), 400
+
+        output_path = Path.cwd() / filename
+        output_path.write_text(content, encoding='utf-8')
+
+        return jsonify({
+            'success': True,
+            'filePath': str(output_path),
+            'message': 'Report saved successfully'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/send-summary-email', methods=['POST'])
+def send_summary_email():
+    """Send summary content as an email attachment using SMTP settings from environment variables."""
+    try:
+        data = request.get_json(silent=True) or {}
+        recipient_email = (data.get('recipientEmail') or '').strip()
+        summary_content = data.get('summaryContent') or ''
+        subject = data.get('subject') or f"Migration Summary - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        file_name = data.get('fileName') or f"migration-summary-{datetime.now().strftime('%Y%m%d-%H%M%S')}.txt"
+
+        if not recipient_email:
+            return jsonify({'success': False, 'error': 'recipientEmail is required'}), 400
+        if not summary_content:
+            return jsonify({'success': False, 'error': 'summaryContent is required'}), 400
+
+        send_email_with_attachment(recipient_email, subject, summary_content, file_name)
+
+        return jsonify({
+            'success': True,
+            'message': f'Summary email sent to {recipient_email}'
+        })
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Failed to send email: {str(e)}'}), 500
 
 
 # Serve React App

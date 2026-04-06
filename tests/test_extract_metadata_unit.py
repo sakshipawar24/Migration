@@ -29,6 +29,14 @@ def test_extract_connection_details_sql_and_lakehouse():
     assert (lh_server, lh_db) == ("ws1", "lh1")
 
 
+def test_extract_connection_details_sql_parameterized_arguments():
+    server, database = extract_metadata.extract_connection_details(
+        'let Source = Sql.Database(SqlServerInstance, SqlServerDatabase) in Source'
+    )
+
+    assert (server, database) == ("SqlServerInstance", "SqlServerDatabase")
+
+
 def test_collect_metadata_returns_model_and_table_details(tmp_path):
     pbip_path = tmp_path / "Report"
     definition = pbip_path / "definition"
@@ -81,3 +89,34 @@ partition Sales = m
     assert table["connectionType"] == "Sql.Database"
     assert table["server"] == "table-server"
     assert table["database"] == "table-db"
+
+
+def test_collect_metadata_extracts_inline_source_query(tmp_path):
+    pbip_path = tmp_path / "Report"
+    definition = pbip_path / "definition"
+    tables_dir = definition / "tables"
+    tables_dir.mkdir(parents=True)
+
+    (definition / "database.tmdl").write_text(
+        "server: fallback-server\ndatabase: fallback-db\n",
+        encoding="utf-8",
+    )
+
+    (tables_dir / "InlineQuery.tmdl").write_text(
+        """
+table 'InlineQuery'
+partition InlineQuery = m
+    mode: DirectQuery
+    source = Sql.Database("inline-server", "inline-db", [Query="SELECT * FROM [inline-db].[dbo].[DimDate]"])
+    annotation PBI_NavigationStepName = Navigation
+""",
+        encoding="utf-8",
+    )
+
+    metadata = extract_metadata.collect_metadata(pbip_path)
+
+    assert len(metadata["tables"]) == 1
+    table = metadata["tables"][0]
+    assert "Sql.Database(\"inline-server\", \"inline-db\"" in table["mQuery"]
+    assert table["server"] == "inline-server"
+    assert table["database"] == "inline-db"

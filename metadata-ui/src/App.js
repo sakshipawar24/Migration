@@ -10,6 +10,7 @@ import * as XLSX from 'xlsx';
 const USER_INPUTS_STORAGE_KEY = 'migration-ui-user-inputs-v1';
 const WORKSPACE_ID_HISTORY_KEY = 'migration-ui-workspace-id-history-v1';
 const METADATA_CACHE_STORAGE_KEY = 'migration-ui-metadata-cache-v1';
+const REPORT_TRACKER_STATUS_STORAGE_KEY = 'migration-ui-report-tracker-status-v1';
 const MAX_WORKSPACE_HISTORY = 10;
 
 const DEFAULT_COMPLEXITY_MATRIX = {
@@ -43,6 +44,119 @@ const sanitizeComplexityMatrix = (candidate) => {
   return next;
 };
 
+const normalizeSqlArg = (value = '') => {
+  const token = String(value).trim();
+  if (!token) {
+    return '';
+  }
+
+  const hashQuoted = token.match(/^#"([^"]+)"$/);
+  if (hashQuoted) {
+    return hashQuoted[1].trim();
+  }
+
+  const quoted = token.match(/^["'](.+)["']$/);
+  if (quoted) {
+    return quoted[1].trim();
+  }
+
+  return token;
+};
+
+const extractConnectionFromQuery = (query = '') => {
+  if (!query) {
+    return { server: '', database: '' };
+  }
+
+  const sqlQuoted = query.match(/Sql\.Database\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"/i);
+  if (sqlQuoted) {
+    return { server: sqlQuoted[1], database: sqlQuoted[2] };
+  }
+
+  const sqlParam = query.match(/Sql\.Database\s*\(\s*([^,)\r\n]+)\s*,\s*([^,)\r\n]+)/i);
+  if (sqlParam) {
+    return {
+      server: normalizeSqlArg(sqlParam[1]),
+      database: normalizeSqlArg(sqlParam[2])
+    };
+  }
+
+  const lakehouse = query.match(/WorkspaceId\s*=\s*"([^"]+)"[\s\S]*?LakehouseId\s*=\s*"([^"]+)"/i);
+  if (lakehouse) {
+    return { server: lakehouse[1], database: lakehouse[2] };
+  }
+
+  return { server: '', database: '' };
+};
+
+const enrichMetadataRows = (rows = []) => {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows.map((row) => {
+    const query = row?.mQuery || row?.M_Query_Preview || '';
+    const details = extractConnectionFromQuery(query);
+    return {
+      ...row,
+      server: row?.server || details.server || '',
+      database: row?.database || details.database || ''
+    };
+  });
+};
+
+const enrichMetadataCache = (cache = {}) => {
+  if (!cache || typeof cache !== 'object') {
+    return {};
+  }
+
+  const next = {};
+  Object.entries(cache).forEach(([report, value]) => {
+    const entry = value || {};
+    next[report] = {
+      before: enrichMetadataRows(entry.before || []),
+      after: enrichMetadataRows(entry.after || [])
+    };
+  });
+  return next;
+};
+
+const inferReportName = (row = {}) => {
+  if (row.reportName) {
+    return String(row.reportName);
+  }
+  if (row.reportDisplay) {
+    return String(row.reportDisplay);
+  }
+  const nameValue = String(row.name || '').trim();
+  if (nameValue.includes('::')) {
+    return nameValue.split('::')[0].trim();
+  }
+  return nameValue;
+};
+
+const groupMetadataRowsByReport = (rows = []) => {
+  const grouped = {};
+  if (!Array.isArray(rows)) {
+    return grouped;
+  }
+
+  rows.forEach((row) => {
+    const reportName = inferReportName(row);
+    if (!reportName) {
+      return;
+    }
+    if (!grouped[reportName]) {
+      grouped[reportName] = [];
+    }
+    grouped[reportName].push(row);
+  });
+
+  return grouped;
+};
+
+const normalizeReportKey = (value = '') => String(value || '').trim().toLowerCase();
+
 function App() {
   // Azure AD credentials
   const [tenantId, setTenantId] = useState('');
@@ -61,6 +175,8 @@ function App() {
   const [downloadStatus, setDownloadStatus] = useState('idle');
   const [convertStatus, setConvertStatus] = useState('idle');
   const [connectionStatus, setConnectionStatus] = useState('idle');
+  const [summaryEmailRecipient, setSummaryEmailRecipient] = useState('');
+  const [sendingSummaryEmail, setSendingSummaryEmail] = useState(false);
   const [sessionDownloadedCount, setSessionDownloadedCount] = useState(0);
   const [sessionConvertedCount, setSessionConvertedCount] = useState(0);
 
@@ -81,6 +197,7 @@ function App() {
   const [metadataBefore, setMetadataBefore] = useState(undefined);
   const [metadataAfter, setMetadataAfter] = useState(undefined);
   const [metadataCache, setMetadataCache] = useState({});
+  const [reportTrackerStatus, setReportTrackerStatus] = useState({});
   const [changeConnectionReport, setChangeConnectionReport] = useState('');
   const [, setDownloadLog] = useState([]);
   const [, setConvertLog] = useState([]);
@@ -104,7 +221,8 @@ function App() {
   };
 
   useEffect(() => {
-    try {
+    const restore = async () => {
+      try {
       let parsedValues = null;
       const savedValues = localStorage.getItem(USER_INPUTS_STORAGE_KEY);
       if (savedValues) {
@@ -159,14 +277,59 @@ function App() {
       if (savedMetadataCache) {
         const parsedMetadataCache = JSON.parse(savedMetadataCache);
         if (parsedMetadataCache && typeof parsedMetadataCache === 'object') {
-          setMetadataCache(parsedMetadataCache);
+          setMetadataCache(enrichMetadataCache(parsedMetadataCache));
         }
+      }
+
+      const savedReportTrackerStatus = localStorage.getItem(REPORT_TRACKER_STATUS_STORAGE_KEY);
+      if (savedReportTrackerStatus) {
+        const parsedReportTrackerStatus = JSON.parse(savedReportTrackerStatus);
+        if (parsedReportTrackerStatus && typeof parsedReportTrackerStatus === 'object') {
+          setReportTrackerStatus(parsedReportTrackerStatus);
+        }
+      }
+
+      try {
+        const configResponse = await fetch('http://localhost:5000/api/pbi/config');
+        const configData = await configResponse.json();
+        if (configData.success) {
+          setTenantId(configData.tenantId || '');
+          setClientId(configData.clientId || '');
+          setClientSecret(configData.clientSecret || '');
+          setSourceWorkspaceId((prev) => prev || configData.sourceWorkspaceId || '');
+          setTargetWorkspaceId((prev) => prev || configData.targetWorkspaceId || '');
+          setPbixFolder((prev) => prev || configData.pbixFolder || 'D:\\PBIX');
+        }
+      } catch (configErr) {
+        console.error('Failed to restore backend Power BI config:', configErr);
+      }
+
+      try {
+        const resolvedPbixFolder = parsedValues?.pbixFolder || 'D:\\PBIX';
+        const resolvedPbipFolder = resolvedPbixFolder.includes('PBIX')
+          ? resolvedPbixFolder.replace('PBIX', 'PBIP')
+          : 'D:\\PBIP';
+        const metadataResponse = await fetch(
+          `http://localhost:5000/api/pbi/metadata-cache?pbipFolder=${encodeURIComponent(resolvedPbipFolder)}`
+        );
+        const metadataData = await metadataResponse.json();
+        if (metadataData.success && metadataData.metadataCache && typeof metadataData.metadataCache === 'object') {
+          setMetadataCache((prev) => ({
+            ...prev,
+            ...enrichMetadataCache(metadataData.metadataCache)
+          }));
+        }
+      } catch (metadataErr) {
+        console.error('Failed to restore backend metadata cache:', metadataErr);
       }
     } catch (err) {
       console.error('Failed to restore saved inputs:', err);
     } finally {
       setIsStorageHydrated(true);
     }
+    };
+
+    restore();
   }, []);
 
   useEffect(() => {
@@ -228,6 +391,14 @@ function App() {
   }, [isStorageHydrated, metadataCache]);
 
   useEffect(() => {
+    if (!isStorageHydrated) {
+      return;
+    }
+
+    localStorage.setItem(REPORT_TRACKER_STATUS_STORAGE_KEY, JSON.stringify(reportTrackerStatus));
+  }, [isStorageHydrated, reportTrackerStatus]);
+
+  useEffect(() => {
     if (!selectedReport) {
       return;
     }
@@ -237,8 +408,8 @@ function App() {
       return;
     }
 
-    setMetadataBefore(cachedMetadata.before || []);
-    setMetadataAfter(cachedMetadata.after || []);
+    setMetadataBefore(enrichMetadataRows(cachedMetadata.before || []));
+    setMetadataAfter(enrichMetadataRows(cachedMetadata.after || []));
   }, [selectedReport, metadataCache]);
 
   const addWorkspaceIdToHistory = (workspaceId, setHistory) => {
@@ -376,21 +547,24 @@ function App() {
       });
       const data = await response.json();
       if (data.success) {
-        const beforeData = data.before || [];
-        const afterData = data.after || [];
+        const beforeData = enrichMetadataRows(data.before || []);
+        const afterData = enrichMetadataRows(data.after || []);
         setMetadataCache((prev) => {
           const existing = prev[reportName] || {};
-          const nextBefore = preserveBefore && existing.before && existing.before.length > 0
-            ? existing.before
-            : beforeData;
+          const nextBefore = beforeData.length > 0
+            ? beforeData
+            : (preserveBefore && existing.before && existing.before.length > 0 ? existing.before : beforeData);
           return {
             ...prev,
             [reportName]: { before: nextBefore, after: afterData }
           };
         });
         setMetadataBefore((prev) => {
+          if (beforeData.length > 0) {
+            return beforeData;
+          }
           if (preserveBefore && prev && prev.length > 0) {
-            return prev;
+            return enrichMetadataRows(prev);
           }
           return beforeData;
         });
@@ -449,7 +623,7 @@ function App() {
       });
       const data = await response.json();
       if (data.success) {
-        const beforeData = data.before || [];
+        const beforeData = enrichMetadataRows(data.before || []);
         setMetadataCache((prev) => ({
           ...prev,
           [reportName]: { before: beforeData, after: [] }
@@ -632,6 +806,7 @@ function App() {
         showStatus('Publish completed.', 'success');
         setPublishStatus('success');
         setPublishNote(data.message || 'Publish completed.');
+        markTrackerStatusForReports(knownReportNames, 'publishStatus', 'Success');
       } else {
         showStatus(data.error || 'Publish failed.', 'error');
         setPublishStatus('error');
@@ -673,6 +848,7 @@ function App() {
         showStatus('Refresh triggered.', 'success');
         setRefreshStatus('success');
         setRefreshNote(data.message || 'Refresh triggered.');
+        markTrackerStatusForReports(knownReportNames, 'refreshStatus', 'Success');
       } else {
         showStatus(data.error || 'Refresh failed.', 'error');
         setRefreshStatus('error');
@@ -720,10 +896,10 @@ const changeConnection = async (reportName = null) => {
        });
        const data = await response.json();
        if (data.success) {
-         const beforeData = data.before || [];
-         const afterData = data.after || [];
+         const beforeData = enrichMetadataRows(data.before || []);
+         const afterData = enrichMetadataRows(data.after || []);
          const existingBefore = (metadataCache[report] && metadataCache[report].before) || [];
-         const nextBefore = existingBefore.length > 0 ? existingBefore : beforeData;
+         const nextBefore = beforeData.length > 0 ? beforeData : existingBefore;
          setMetadataCache((prev) => ({
            ...prev,
            [report]: { before: nextBefore, after: afterData }
@@ -843,6 +1019,34 @@ const changeConnection = async (reportName = null) => {
       if (data.success) {
         showStatus('All steps completed.', 'success');
         setRunAllOutput(data.output || '');
+        setDownloadStatus('success');
+        setConvertStatus('success');
+        setConnectionStatus('success');
+        setPublishStatus('success');
+        setRefreshStatus('success');
+        setPublishNote('Publish completed.');
+        setRefreshNote('Refresh completed.');
+
+        const groupedBefore = groupMetadataRowsByReport(enrichMetadataRows(data.before || []));
+        const groupedAfter = groupMetadataRowsByReport(enrichMetadataRows(data.after || []));
+        const runAllReportNames = Array.from(
+          new Set([...knownReportNames, ...Object.keys(groupedBefore), ...Object.keys(groupedAfter)])
+        );
+        setMetadataCache((prev) => {
+          const next = { ...prev };
+          const allReportNames = new Set([...Object.keys(groupedBefore), ...Object.keys(groupedAfter)]);
+          allReportNames.forEach((reportName) => {
+            const existing = next[reportName] || {};
+            next[reportName] = {
+              before: groupedBefore[reportName] || existing.before || [],
+              after: groupedAfter[reportName] || existing.after || []
+            };
+          });
+          return next;
+        });
+        markTrackerStatusForReports(runAllReportNames, 'publishStatus', 'Success');
+        markTrackerStatusForReports(runAllReportNames, 'refreshStatus', 'Success');
+
         fetchPbipReports();
         fetchPbixReports();
       } else {
@@ -869,6 +1073,54 @@ const changeConnection = async (reportName = null) => {
     const names = pbipReports.map((report) => report.displayName || report.name).filter(Boolean);
     return Array.from(new Set(names));
   }, [pbipReports]);
+
+  const knownReportNames = React.useMemo(() => {
+    const names = new Set();
+
+    pbixReports.forEach((report) => {
+      const reportName = report.displayName || report.name;
+      if (reportName) {
+        names.add(reportName);
+      }
+    });
+
+    pbipReports.forEach((report) => {
+      const reportName = report.displayName || report.name;
+      if (reportName) {
+        names.add(reportName);
+      }
+    });
+
+    Object.keys(metadataCache || {}).forEach((reportName) => {
+      if (reportName) {
+        names.add(reportName);
+      }
+    });
+
+    return Array.from(names);
+  }, [metadataCache, pbipReports, pbixReports]);
+
+  const markTrackerStatusForReports = useCallback((reportNames, field, value) => {
+    const keys = (reportNames || [])
+      .map((name) => normalizeReportKey(name))
+      .filter(Boolean);
+
+    if (keys.length === 0) {
+      return;
+    }
+
+    setReportTrackerStatus((prev) => {
+      const next = { ...prev };
+      keys.forEach((key) => {
+        const existing = next[key] || {};
+        next[key] = {
+          ...existing,
+          [field]: value
+        };
+      });
+      return next;
+    });
+  }, []);
 
   const parseComplexityThreshold = (value) => {
     const match = String(value || '').match(/\d+/);
@@ -1015,19 +1267,6 @@ const changeConnection = async (reportName = null) => {
   }, [complexityMatrix]);
 
   const reportStatusRows = React.useMemo(() => {
-    const toStatusLabel = (status) => {
-      if (status === 'running') {
-        return 'Running';
-      }
-      if (status === 'success') {
-        return 'Success';
-      }
-      if (status === 'error') {
-        return 'Error';
-      }
-      return 'Not started';
-    };
-
     const reportMap = new Map();
 
     pbixReports.forEach((report) => {
@@ -1113,6 +1352,26 @@ const changeConnection = async (reportName = null) => {
         ? `${workflowStatus} | ${complexity} complexity`
         : `${workflowStatus} | ${complexity} complexity | Validate: ${validationIssues.join('; ')}`;
 
+      const trackerEntry = reportTrackerStatus[normalizeReportKey(reportRow.reportName || reportRow.displayName)] || {};
+      let trackerPublishStatus = trackerEntry.publishStatus || 'Not started';
+      let trackerRefreshStatus = trackerEntry.refreshStatus || 'Not started';
+
+      if (publishStatus === 'running') {
+        trackerPublishStatus = 'Running';
+      } else if (publishStatus === 'success') {
+        trackerPublishStatus = 'Success';
+      } else if (publishStatus === 'error' && !trackerEntry.publishStatus) {
+        trackerPublishStatus = 'Error';
+      }
+
+      if (refreshStatus === 'running') {
+        trackerRefreshStatus = 'Running';
+      } else if (refreshStatus === 'success') {
+        trackerRefreshStatus = 'Success';
+      } else if (refreshStatus === 'error' && !trackerEntry.refreshStatus) {
+        trackerRefreshStatus = 'Error';
+      }
+
       return {
         ...reportRow,
         tableCount: metrics.tableCount,
@@ -1122,13 +1381,22 @@ const changeConnection = async (reportName = null) => {
         validationStatus,
         comments,
         workflowStatus,
-        publishStatus: toStatusLabel(publishStatus),
-        refreshStatus: toStatusLabel(refreshStatus)
+        publishStatus: trackerPublishStatus,
+        refreshStatus: trackerRefreshStatus
       };
     });
 
     return rows.sort((left, right) => left.displayName.localeCompare(right.displayName));
-  }, [computeReportMetrics, getComplexityLabel, metadataCache, pbipReports, pbixReports, publishStatus, refreshStatus]);
+  }, [
+    computeReportMetrics,
+    getComplexityLabel,
+    metadataCache,
+    pbipReports,
+    pbixReports,
+    publishStatus,
+    refreshStatus,
+    reportTrackerStatus
+  ]);
 
   const formatStatusLabel = (status) => {
     if (status === 'running') {
@@ -1314,6 +1582,104 @@ const changeConnection = async (reportName = null) => {
 
     const fileName = `migration-summary-${today}.xlsx`;
     XLSX.writeFile(workbook, fileName);
+  };
+
+  const buildSummaryEmailContent = () => {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const generatedAtUtc = now.toISOString();
+    const downloadedCount = reportStatusRows.filter((row) => row.downloaded).length;
+    const convertedCount = reportStatusRows.filter((row) => row.converted).length;
+    const metadataExtractedCount = reportStatusRows.filter((row) => row.metadataBeforeCount > 0).length;
+    const connectionUpdatedCount = reportStatusRows.filter((row) => row.metadataAfterCount > 0).length;
+    const publishSuccessCount = reportStatusRows.filter((row) => row.publishStatus === 'Success').length;
+    const refreshSuccessCount = reportStatusRows.filter((row) => row.refreshStatus === 'Success').length;
+
+    const lines = [
+      'PBIP Migration Summary',
+      `Date: ${today}`,
+      `Generated At (UTC): ${generatedAtUtc}`,
+      '',
+      'Configuration',
+      `Tenant ID: ${tenantId || '-'}`,
+      `Client ID: ${clientId || '-'}`,
+      `Source Workspace: ${sourceWorkspaceId || '-'}`,
+      `Target Workspace: ${targetWorkspaceId || '-'}`,
+      `PBIX Folder: ${pbixFolder || '-'}`,
+      `Target Technology: ${autoTargetTechnology || '-'}`,
+      '',
+      'Workflow Status',
+      `Auth: ${authConfigured ? 'Configured' : 'Pending'}`,
+      `Download: ${formatStatusLabel(downloadStatus)}`,
+      `Convert: ${formatStatusLabel(convertStatus)}`,
+      `Connection: ${formatStatusLabel(connectionStatus)}`,
+      `Publish: ${formatStatusLabel(publishStatus)}`,
+      `Refresh: ${formatStatusLabel(refreshStatus)}`,
+      '',
+      'Operational Summary',
+      `Reports Downloaded: ${downloadedCount}`,
+      `Reports Converted: ${convertedCount}`,
+      `Metadata Extracted: ${metadataExtractedCount}`,
+      `Connections Updated: ${connectionUpdatedCount}`,
+      `Publish Success: ${publishSuccessCount}`,
+      `Refresh Success: ${refreshSuccessCount}`,
+      '',
+      'Per Report Status'
+    ];
+
+    if (reportStatusRows.length === 0) {
+      lines.push('No reports found.');
+    } else {
+      reportStatusRows.forEach((row, index) => {
+        lines.push(
+          `${index + 1}. ${row.displayName || row.reportName} | `
+          + `Download: ${row.downloaded ? 'Success' : 'Pending'} | `
+          + `Convert: ${row.converted ? 'Success' : 'Pending'} | `
+          + `Connection: ${row.metadataAfterCount > 0 ? 'Success' : 'Pending'} | `
+          + `Publish: ${row.publishStatus} | Refresh: ${row.refreshStatus} | `
+          + `Complexity: ${row.complexity}`
+        );
+      });
+    }
+
+    return lines.join('\n');
+  };
+
+  const sendSummaryByEmail = async () => {
+    const recipient = summaryEmailRecipient.trim();
+    if (!recipient) {
+      showStatus('Enter a recipient email address first.', 'warning');
+      return;
+    }
+
+    const now = new Date();
+    const stamp = now.toISOString().slice(0, 10);
+    const subject = `PBIP Migration Summary - ${stamp}`;
+
+    setSendingSummaryEmail(true);
+    try {
+      const response = await fetch('http://localhost:5000/api/send-summary-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientEmail: recipient,
+          subject,
+          summaryContent: buildSummaryEmailContent(),
+          fileName: `migration-summary-${stamp}.txt`
+        })
+      });
+
+      const payload = await response.json();
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || 'Failed to send summary email');
+      }
+
+      showStatus(payload.message || 'Summary email sent successfully.', 'success');
+    } catch (error) {
+      showStatus(error.message || 'Failed to send summary email.', 'error');
+    } finally {
+      setSendingSummaryEmail(false);
+    }
   };
 
   const downloadReportStatus = () => {
@@ -1808,6 +2174,21 @@ const changeConnection = async (reportName = null) => {
             </button>
             <button className="action-btn secondary-btn" onClick={downloadReportStatus}>
               Download Detailed Report
+            </button>
+            <input
+              type="email"
+              className="text-input summary-email-input"
+              value={summaryEmailRecipient}
+              onChange={(event) => setSummaryEmailRecipient(event.target.value)}
+              placeholder="recipient@example.com"
+              aria-label="Summary email recipient"
+            />
+            <button
+              className="action-btn secondary-btn"
+              onClick={sendSummaryByEmail}
+              disabled={sendingSummaryEmail || !summaryEmailRecipient.trim()}
+            >
+              {sendingSummaryEmail ? 'Sending...' : 'Send Summary Email'}
             </button>
           </div>
 

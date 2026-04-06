@@ -102,6 +102,7 @@ function MetadataComparisonComponent({
                 {filteredBefore.map((row) => {
                   const tableName = getRowTableName(row);
                   const query = row.mQuery || "";
+                  const derived = extractConnectionFromQuery(query);
 
                   return (
                     <tr key={row.name}>
@@ -110,8 +111,8 @@ function MetadataComparisonComponent({
                       <td>{row.mode || ""}</td>
                       <td>{row.source || ""}</td>
                       <td>{row.connectionType || ""}</td>
-                      <td>{row.server || ""}</td>
-                      <td>{row.database || ""}</td>
+                      <td>{row.server || derived.server || ""}</td>
+                      <td>{row.database || derived.database || ""}</td>
                       <td className="mono-cell">
                         {query ? (
                           <button
@@ -152,15 +153,19 @@ function MetadataComparisonComponent({
                 </tr>
               </thead>
               <tbody>
-                {filteredAfter.map((row) => (
+                {filteredAfter.map((row) => {
+                  const query = row.mQuery || "";
+                  const derived = extractConnectionFromQuery(query);
+
+                  return (
                   <tr key={row.name}>
                     <td>Table</td>
                     <td>{getRowTableName(row)}</td>
                     <td>{getAfterValue("mode", row.mode)}</td>
                     <td>{getAfterValue("source", row.source)}</td>
                     <td>{getAfterValue("connectionType", row.connectionType)}</td>
-                    <td>{row.server}</td>
-                    <td>{row.database}</td>
+                    <td>{row.server || derived.server || ""}</td>
+                    <td>{row.database || derived.database || ""}</td>
                     <td className="mono-cell">
                       {row.mQuery ? (
                         <button
@@ -175,7 +180,7 @@ function MetadataComparisonComponent({
                       )}
                     </td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           )}
@@ -238,6 +243,48 @@ function getRowTableName(row = {}) {
 function matchesReport(row, selectedReport) {
   const report = row.reportDisplay || row.reportName || getReportName(row.name || "");
   return report === selectedReport;
+}
+
+function normalizeSqlArg(value = "") {
+  const token = String(value).trim();
+  if (!token) {
+    return "";
+  }
+
+  const hashQuoted = token.match(/^#"([^"]+)"$/);
+  if (hashQuoted) {
+    return hashQuoted[1].trim();
+  }
+
+  const quoted = token.match(/^["'](.+)["']$/);
+  if (quoted) {
+    return quoted[1].trim();
+  }
+
+  return token;
+}
+
+function extractConnectionFromQuery(query = "") {
+  if (!query) {
+    return { server: "", database: "" };
+  }
+
+  const sqlQuoted = query.match(/Sql\.Database\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"/i);
+  if (sqlQuoted) {
+    return { server: sqlQuoted[1], database: sqlQuoted[2] };
+  }
+
+  const sqlParam = query.match(/Sql\.Database\s*\(\s*([^,)\r\n]+)\s*,\s*([^,)\r\n]+)/i);
+  if (sqlParam) {
+    return { server: normalizeSqlArg(sqlParam[1]), database: normalizeSqlArg(sqlParam[2]) };
+  }
+
+  const lakehouse = query.match(/WorkspaceId\s*=\s*"([^"]+)"[\s\S]*?LakehouseId\s*=\s*"([^"]+)"/i);
+  if (lakehouse) {
+    return { server: lakehouse[1], database: lakehouse[2] };
+  }
+
+  return { server: "", database: "" };
 }
 
 export default MetadataComparisonComponent;

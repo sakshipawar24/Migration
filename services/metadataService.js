@@ -187,15 +187,28 @@ function extractMQuery(content) {
   const buffer = [];
 
   for (const line of lines) {
-    const trimmed = line.trim().toLowerCase();
+    const trimmed = line.trim();
+    const lower = trimmed.toLowerCase();
 
-    if (trimmed === "source =") {
+    if (!capture && lower.startsWith("source")) {
+      const sourceMatch = trimmed.match(/^source\s*=\s*(.*)$/i);
+      if (sourceMatch) {
+        capture = true;
+        const inlineExpression = (sourceMatch[1] || "").trim();
+        if (inlineExpression) {
+          buffer.push(inlineExpression);
+        }
+        continue;
+      }
+    }
+
+    if (lower === "source =") {
       capture = true;
       continue;
     }
 
     if (capture) {
-      if (trimmed.startsWith("annotation")) {
+      if (lower.startsWith("annotation")) {
         break;
       }
       buffer.push(line);
@@ -234,6 +247,14 @@ function extractConnectionDetails(mQuery) {
     return { server: sqlMatch[1], database: sqlMatch[2] };
   }
 
+  const sqlParamMatch = mQuery.match(/Sql\.Database\s*\(\s*([^,\)\r\n]+)\s*,\s*([^,\)\r\n]+)/i);
+  if (sqlParamMatch) {
+    return {
+      server: normalizeSqlArg(sqlParamMatch[1]),
+      database: normalizeSqlArg(sqlParamMatch[2])
+    };
+  }
+
   // Match both uppercase WorkspaceId/LakehouseId and lowercase variants
   const lakehouseMatch = mQuery.match(/(?:workspace|lakehouses)[\w.]*\s*=\s*\"([^\"]+)\"[\s\S]*?(?:lakehouses|warehouse)?[\w.]*\s*=\s*\"([^\"]+)\"/i);
   if (lakehouseMatch) {
@@ -241,6 +262,25 @@ function extractConnectionDetails(mQuery) {
   }
 
   return { server: "", database: "" };
+}
+
+function normalizeSqlArg(value) {
+  const token = String(value || "").trim();
+  if (!token) {
+    return "";
+  }
+
+  const hashQuoted = token.match(/^#"([^"]+)"$/);
+  if (hashQuoted) {
+    return hashQuoted[1].trim();
+  }
+
+  const quoted = token.match(/^["'](.+)["']$/);
+  if (quoted) {
+    return quoted[1].trim();
+  }
+
+  return token;
 }
 
 function connectorFallback(tables) {
