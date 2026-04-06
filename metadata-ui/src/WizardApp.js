@@ -6,7 +6,6 @@ import Step3Summary from './components/Step3Summary';
 import Step4DetailedForm from './components/Step4DetailedForm';
 import Step5Download from './components/Step5Download';
 import './styles/WizardSteps.css';
-import * as XLSX from 'xlsx';
 
 const WIZARD_STORAGE_KEY = 'pbip-wizard-state-v1';
 const DEFAULT_COMPLEXITY_MATRIX = {
@@ -44,9 +43,13 @@ export default function WizardApp() {
 
   // Metadata State
   const [metadata, setMetadata] = useState([]);
-  const [metadataCache, setMetadataCache] = useState({});
   const [complexityMatrix, setComplexityMatrix] = useState(DEFAULT_COMPLEXITY_MATRIX);
   const [busyAction, setBusyAction] = useState(null);
+
+  const showStatus = useCallback((text, type = 'info') => {
+    setStatusMessage({ text, type });
+    setTimeout(() => setStatusMessage({ text: '', type: '' }), 5000);
+  }, []);
 
   // Load state from localStorage on mount
   useEffect(() => {
@@ -155,12 +158,7 @@ export default function WizardApp() {
     if (activeStep >= 3) {
       loadMetadata();
     }
-  }, [changeConnectionReport, activeStep, pbipFolder]);
-
-  const showStatus = useCallback((text, type = 'info') => {
-    setStatusMessage({ text, type });
-    setTimeout(() => setStatusMessage({ text: '', type: '' }), 5000);
-  }, []);
+  }, [changeConnectionReport, activeStep, pbipFolder, showStatus]);
 
   const saveAuthConfig = useCallback(async () => {
     setBusyAction('saving-config');
@@ -288,7 +286,6 @@ export default function WizardApp() {
         return (
           <Step4DetailedForm
             metadata={metadata}
-            metadataCache={metadataCache}
             complexityMatrix={complexityMatrix}
             onComplexityMatrixChange={handleComplexityMatrixChange}
             onNext={handleNextStep}

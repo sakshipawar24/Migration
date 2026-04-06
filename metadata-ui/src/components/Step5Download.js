@@ -12,7 +12,6 @@ export default function Step5Download({
   busyAction,
   showStatus
 }) {
-  const [downloadFormat, setDownloadFormat] = useState('xlsx');
   const [isDownloading, setIsDownloading] = useState(false);
 
   const generateSummaryData = () => {
