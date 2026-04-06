@@ -803,6 +803,14 @@ function App() {
   };
 
   const publishPbix = async () => {
+    const pendingReports = getPendingReportNames('publishStatus');
+    if (pendingReports.length === 0) {
+      showStatus('All reports are already published. Nothing remaining.', 'info');
+      setPublishStatus('success');
+      setPublishNote('All reports already published.');
+      return;
+    }
+
     setPublishStatus('running');
     setPublishNote('Publishing in progress.');
     setBusyAction('publish');
@@ -814,6 +822,7 @@ function App() {
           sourceWorkspaceId: sourceWorkspaceId || undefined,
           targetWorkspaceId: targetWorkspaceId || undefined,
           pbixFolder,
+          reportNames: pendingReports,
           tenantId,
           clientId,
           clientSecret
@@ -824,7 +833,7 @@ function App() {
         showStatus('Publish completed.', 'success');
         setPublishStatus('success');
         setPublishNote(data.message || 'Publish completed.');
-        markTrackerStatusForReports(knownReportNames, 'publishStatus', 'Success');
+        markTrackerStatusForReports(pendingReports, 'publishStatus', 'Success');
       } else {
         showStatus(data.error || 'Publish failed.', 'error');
         setPublishStatus('error');
@@ -845,6 +854,14 @@ function App() {
       return;
     }
 
+    const pendingReports = getPendingReportNames('refreshStatus');
+    if (pendingReports.length === 0) {
+      showStatus('All reports are already refreshed. Nothing remaining.', 'info');
+      setRefreshStatus('success');
+      setRefreshNote('All reports already refreshed.');
+      return;
+    }
+
     setRefreshStatus('running');
     setRefreshNote('Refreshing in progress.');
     setBusyAction('refresh');
@@ -856,6 +873,7 @@ function App() {
           sourceWorkspaceId: sourceWorkspaceId || undefined,
           targetWorkspaceId,
           pbixFolder,
+          reportNames: pendingReports,
           tenantId,
           clientId,
           clientSecret
@@ -866,7 +884,7 @@ function App() {
         showStatus('Refresh triggered.', 'success');
         setRefreshStatus('success');
         setRefreshNote(data.message || 'Refresh triggered.');
-        markTrackerStatusForReports(knownReportNames, 'refreshStatus', 'Success');
+        markTrackerStatusForReports(pendingReports, 'refreshStatus', 'Success');
       } else {
         showStatus(data.error || 'Refresh failed.', 'error');
         setRefreshStatus('error');
@@ -1117,6 +1135,13 @@ const changeConnection = async (reportName = null) => {
 
     return Array.from(names);
   }, [metadataCache, pbipReports, pbixReports]);
+
+  const getPendingReportNames = useCallback((statusField) => {
+    return knownReportNames.filter((name) => {
+      const entry = reportTrackerStatus[normalizeReportKey(name)] || {};
+      return entry[statusField] !== 'Success';
+    });
+  }, [knownReportNames, reportTrackerStatus]);
 
   const markTrackerStatusForReports = useCallback((reportNames, field, value) => {
     const keys = (reportNames || [])
@@ -1389,24 +1414,8 @@ const changeConnection = async (reportName = null) => {
         ? `${workflowStatus} | ${complexity} complexity`
         : `${workflowStatus} | ${complexity} complexity | Validate: ${validationIssues.join('; ')}`;
 
-      let trackerPublishStatus = trackerEntry.publishStatus || 'Not started';
-      let trackerRefreshStatus = trackerEntry.refreshStatus || 'Not started';
-
-      if (publishStatus === 'running') {
-        trackerPublishStatus = 'Running';
-      } else if (publishStatus === 'success') {
-        trackerPublishStatus = 'Success';
-      } else if (publishStatus === 'error' && !trackerEntry.publishStatus) {
-        trackerPublishStatus = 'Error';
-      }
-
-      if (refreshStatus === 'running') {
-        trackerRefreshStatus = 'Running';
-      } else if (refreshStatus === 'success') {
-        trackerRefreshStatus = 'Success';
-      } else if (refreshStatus === 'error' && !trackerEntry.refreshStatus) {
-        trackerRefreshStatus = 'Error';
-      }
+      const trackerPublishStatus = trackerEntry.publishStatus || 'Not started';
+      const trackerRefreshStatus = trackerEntry.refreshStatus || 'Not started';
 
       return {
         ...reportRow,

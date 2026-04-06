@@ -17,6 +17,15 @@ import zipfile
 import tempfile
 from datetime import datetime
 
+from migration_engine.connectors.registry import ConnectorRegistry
+from migration_engine.models import TransformationRequest
+from migration_engine.services.auth import resolve_auth_config, validate_auth_config
+from migration_engine.services.batch_processor import run_batch
+from migration_engine.services.metadata_classifier import classify_rows
+from migration_engine.services.transformation_engine import TransformationEngine
+from migration_engine.services.validation import pre_validate_request, post_validate_result
+from migration_engine.utils.audit_logger import read_audit_events, write_audit_event
+
 
 STATE_FILE = Path('app_state.json')
 
@@ -105,6 +114,9 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # State storage
 app_state = load_persisted_app_state()
+
+connector_registry = ConnectorRegistry()
+transformation_engine = TransformationEngine()
 
 POWER_BI_SCRIPT = Path('automation') / 'Run-Migration.ps1'
 PBI_TOOLS_PATH = Path(r"C:\Tools\pbi-tools\pbi-tools.exe")
@@ -210,6 +222,7 @@ def run_power_bi_action(action, data, timeout=900):
     workspace_id = data.get('workspaceId') if data else None
     lakehouse_id = data.get('lakehouseId') if data else None
     transformed_pbix_folder = data.get('transformedPbixFolder') if data else None
+    report_names = data.get('reportNames') if data else None
     use_python = bool(data.get('usePython')) if data else False
 
     if server:
@@ -224,6 +237,10 @@ def run_power_bi_action(action, data, timeout=900):
         args.append(f"-LakehouseId '{lakehouse_id}'")
     if transformed_pbix_folder:
         args.append(f"-TransformedPbixFolder '{transformed_pbix_folder}'")
+    if isinstance(report_names, list) and len(report_names) > 0:
+        joined = '|'.join(str(name).replace("'", "''") for name in report_names if str(name).strip())
+        if joined:
+            args.append(f"-ReportNames '{joined}'")
     if use_python:
         args.append("-UsePython")
 
@@ -778,6 +795,20 @@ def change_connection():
         app_state['after_metadata'] = after_metadata
         persist_app_state()
 
+        write_audit_event('connection_transform', {
+            'report': report_name,
+            'source_type': 'Mixed',
+            'target_type': target_technology,
+            'mapping': {
+                'server': server,
+                'database': database,
+                'workspace_id': workspace_id,
+                'lakehouse_id': lakehouse_id,
+            },
+            'status': 'success',
+            'rows_affected': len(after_metadata),
+        })
+
         return jsonify({
             'success': True,
             'message': 'Connection updated - metadata extracted',
@@ -1258,6 +1289,144 @@ def save_report():
             'filePath': str(output_path),
             'message': 'Report saved successfully'
         })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/connectors/catalog', methods=['GET'])
+def connectors_catalog():
+    """Return supported connector catalog for migration planning."""
+    return jsonify({
+        'success': True,
+        'connectors': connector_registry.supported_types()
+    })
+
+
+@app.route('/api/connectors/detect', methods=['POST'])
+def detect_connectors():
+    """Detect connector type per table/query for multi-source reports."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        rows = payload.get('rows', [])
+        result = classify_rows(rows)
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/transform/preview', methods=['POST'])
+def transform_preview():
+    """Config-driven transformation preview for one query or multiple rows."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        source_type = payload.get('source_type') or 'Unknown'
+        target_type = payload.get('target_type') or ''
+        mapping = payload.get('mapping') or {}
+        rows = payload.get('rows')
+        query = payload.get('query') or ''
+
+        pre = pre_validate_request({
+            'source_type': source_type,
+            'target_type': target_type,
+            'mapping': mapping,
+        })
+        if not pre.get('valid'):
+            return jsonify({'success': False, 'errors': pre.get('errors', []), 'warnings': pre.get('warnings', [])}), 400
+
+        if isinstance(rows, list):
+            transformed_rows = transformation_engine.transform_rows(rows, target_type, mapping)
+            write_audit_event('transform_preview_batch', {
+                'source_type': source_type,
+                'target_type': target_type,
+                'rows': len(transformed_rows),
+            })
+            return jsonify({'success': True, 'rows': transformed_rows, 'warnings': pre.get('warnings', [])})
+
+        req = TransformationRequest(
+            source_type=source_type,
+            target_type=target_type,
+            mapping=mapping,
+            query=query,
+        )
+        result = transformation_engine.transform_query(req)
+        post = post_validate_result({'transformed_query': result.transformed_query})
+        write_audit_event('transform_preview_single', {
+            'source_type': source_type,
+            'target_type': target_type,
+            'success': result.success,
+        })
+        return jsonify({
+            'success': result.success,
+            'source_type': source_type,
+            'target_type': target_type,
+            'transformed_query': result.transformed_query,
+            'warnings': result.warnings + post.get('warnings', []),
+            'errors': result.errors + post.get('errors', []),
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/migration/validate', methods=['POST'])
+def validate_migration_request():
+    """Pre-validate migration request payload before running transformations."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        validation = pre_validate_request(payload)
+        return jsonify({'success': True, **validation})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/auth/validate', methods=['POST'])
+def validate_auth_payload():
+    """Validate auth payload without persisting secrets."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        auth_cfg = resolve_auth_config(payload)
+        check = validate_auth_config(auth_cfg)
+        return jsonify({'success': True, **check, 'auth_type': auth_cfg.get('auth_type')})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/migration/batch', methods=['POST'])
+def migration_batch():
+    """Batch processing endpoint for connector detection and transformation previews."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        items = payload.get('items') or []
+        operation = payload.get('operation') or 'detect'
+        target_type = payload.get('target_type') or ''
+        mapping = payload.get('mapping') or {}
+
+        def _run(item):
+            rows = item.get('rows') or []
+            if operation == 'transform_preview':
+                return {
+                    'rows': transformation_engine.transform_rows(rows, target_type, mapping)
+                }
+            return classify_rows(rows)
+
+        result = run_batch(items, _run)
+        write_audit_event('batch_operation', {
+            'operation': operation,
+            'item_count': len(items),
+            'success': result.get('summary', {}).get('success', 0),
+            'failed': result.get('summary', {}).get('failed', 0),
+        })
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/audit/events', methods=['GET'])
+def audit_events():
+    """Read latest migration audit trail events."""
+    try:
+        limit = int(request.args.get('limit', 200))
+        events = read_audit_events(limit=limit)
+        return jsonify({'success': True, 'events': events})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
