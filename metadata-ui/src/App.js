@@ -194,6 +194,7 @@ function App() {
   const [pbixReports, setPbixReports] = useState([]);
   const [metadataBefore, setMetadataBefore] = useState(undefined);
   const [metadataAfter, setMetadataAfter] = useState(undefined);
+  const [migrationInsightsByReport, setMigrationInsightsByReport] = useState({});
   const [metadataCache, setMetadataCache] = useState({});
   const [reportTrackerStatus, setReportTrackerStatus] = useState({});
   const [changeConnectionReport, setChangeConnectionReport] = useState('');
@@ -587,6 +588,8 @@ function App() {
           return beforeData;
         });
         setMetadataAfter(afterData);
+        const analysisRows = beforeData.length > 0 ? beforeData : afterData;
+        runConnectorDetectionAndPreview(reportName, analysisRows);
         if ((data.before || []).length === 0 && (data.after || []).length === 0) {
           showStatus(`No metadata found for "${reportName}". Try running Full Flow first.`, 'info');
         }
@@ -648,6 +651,7 @@ function App() {
         }));
         setMetadataBefore(beforeData);
         setMetadataAfter([]);
+        runConnectorDetectionAndPreview(reportName, beforeData);
         if (beforeData.length === 0) {
           showStatus(`No metadata found for "${reportName}".`, 'info');
         }
@@ -665,6 +669,93 @@ function App() {
     setStatusMessage(message);
     setStatusType(type);
   };
+
+  const mapTargetTechnologyToConnector = useCallback((targetTechnology) => {
+    const value = String(targetTechnology || '').trim().toLowerCase();
+    if (value.includes('fabric')) {
+      return 'FabricLakehouse';
+    }
+    if (value.includes('synapse')) {
+      return 'Synapse';
+    }
+    if (value.includes('sql')) {
+      return 'Synapse';
+    }
+    return 'SQLServer';
+  }, []);
+
+  const runConnectorDetectionAndPreview = useCallback(async (reportName, rows) => {
+    if (!reportName || !Array.isArray(rows) || rows.length === 0) {
+      return;
+    }
+
+    try {
+      const detectResponse = await fetch('http://localhost:5000/api/connectors/detect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows })
+      });
+      const detectData = await detectResponse.json();
+      if (!detectData.success) {
+        setMigrationInsightsByReport((prev) => ({
+          ...prev,
+          [reportName]: {
+            detected: null,
+            previewRows: [],
+            warnings: [],
+            errors: [detectData.error || 'Connector detection failed']
+          }
+        }));
+        return;
+      }
+
+      const connectors = detectData?.summary?.connectors || {};
+      const rankedConnector = Object.entries(connectors)
+        .sort((left, right) => Number(right[1]) - Number(left[1]))
+        .find(([key]) => key !== 'Unknown');
+      const sourceType = rankedConnector ? rankedConnector[0] : 'Unknown';
+
+      const targetType = mapTargetTechnologyToConnector(autoTargetTechnology);
+      const mapping = {
+        server: autoServer,
+        database: autoDatabase,
+        workspace_id: autoWorkspaceId,
+        lakehouse_id: autoLakehouseId
+      };
+
+      const previewResponse = await fetch('http://localhost:5000/api/transform/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_type: sourceType,
+          target_type: targetType,
+          mapping,
+          rows
+        })
+      });
+      const previewData = await previewResponse.json();
+
+      setMigrationInsightsByReport((prev) => ({
+        ...prev,
+        [reportName]: {
+          detected: detectData,
+          previewRows: Array.isArray(previewData.rows) ? previewData.rows : [],
+          warnings: previewData.warnings || [],
+          errors: previewData.errors || []
+        }
+      }));
+    } catch (error) {
+      setMigrationInsightsByReport((prev) => ({
+        ...prev,
+        [reportName]: {
+          detected: null,
+          previewRows: [],
+          warnings: [],
+          errors: [error.message || 'Migration preview failed']
+        }
+      }));
+    }
+  }, [autoDatabase, autoLakehouseId, autoServer, autoTargetTechnology, autoWorkspaceId, mapTargetTechnologyToConnector]);
 
   const saveAuthConfig = async () => {
     if (!tenantId || !clientId || !clientSecret) {
@@ -2146,6 +2237,7 @@ const changeConnection = async (reportName = null) => {
               pbixReports={pbixReports}
               metadataBefore={metadataBefore}
               metadataAfter={metadataAfter}
+              migrationInsights={migrationInsightsByReport[selectedReport] || null}
               statusMessage={statusMessage}
               statusType={statusType}
               targetTechnology={autoTargetTechnology}

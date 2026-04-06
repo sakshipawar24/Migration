@@ -21,6 +21,7 @@ from migration_engine.connectors.registry import ConnectorRegistry
 from migration_engine.models import TransformationRequest
 from migration_engine.services.auth import resolve_auth_config, validate_auth_config
 from migration_engine.services.batch_processor import run_batch
+from migration_engine.services.full_migration_service import FullMigrationService
 from migration_engine.services.metadata_classifier import classify_rows
 from migration_engine.services.transformation_engine import TransformationEngine
 from migration_engine.services.validation import pre_validate_request, post_validate_result
@@ -117,6 +118,7 @@ app_state = load_persisted_app_state()
 
 connector_registry = ConnectorRegistry()
 transformation_engine = TransformationEngine()
+full_migration_service = FullMigrationService(transformation_engine)
 
 POWER_BI_SCRIPT = Path('automation') / 'Run-Migration.ps1'
 PBI_TOOLS_PATH = Path(r"C:\Tools\pbi-tools\pbi-tools.exe")
@@ -344,6 +346,63 @@ def parse_download_summary(output_text):
         'downloaded': downloaded,
         'skipped': skipped
     }
+
+
+def _extract_rows_from_metadata_payload(payload, section='before'):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        if section == 'after' and isinstance(payload.get('after'), list):
+            return payload.get('after') or []
+        if section == 'before' and isinstance(payload.get('before'), list):
+            return payload.get('before') or []
+        if isinstance(payload.get('rows'), list):
+            return payload.get('rows') or []
+        if isinstance(payload.get('tables'), list):
+            return payload.get('tables') or []
+    return []
+
+
+def resolve_request_rows(payload):
+    """Resolve metadata rows from direct payload, report lookup, or metadata file path."""
+    payload = payload or {}
+    section = str(payload.get('section') or 'before').strip().lower()
+
+    direct_rows = payload.get('rows')
+    if isinstance(direct_rows, list) and direct_rows:
+        return direct_rows
+
+    metadata_file_path = payload.get('metadataFilePath')
+    if metadata_file_path:
+        path = Path(metadata_file_path)
+        if path.exists() and path.is_file():
+            metadata_payload = json.loads(path.read_text(encoding='utf-8'))
+            rows = _extract_rows_from_metadata_payload(metadata_payload, section=section)
+            if rows:
+                return rows
+
+    report_name = payload.get('reportName')
+    if report_name:
+        pbip_folder = resolve_pbip_folder(payload.get('pbipFolder'))
+        cache = load_metadata_cache(pbip_folder)
+        exact = cache.get(report_name)
+        fallback = exact
+        if not fallback:
+            for key, value in cache.items():
+                if str(key).lower() == str(report_name).lower():
+                    fallback = value
+                    break
+
+        if fallback:
+            rows = fallback.get('after' if section == 'after' else 'before') or []
+            if rows:
+                return rows
+            # fallback between sections if requested section is empty
+            alt_rows = fallback.get('before' if section == 'after' else 'after') or []
+            if alt_rows:
+                return alt_rows
+
+    return []
 
 
 def normalize_connector_fields(row):
@@ -1307,10 +1366,19 @@ def detect_connectors():
     """Detect connector type per table/query for multi-source reports."""
     try:
         payload = request.get_json(silent=True) or {}
-        rows = payload.get('rows', [])
+        rows = resolve_request_rows(payload)
+        if not rows:
+            return jsonify({'success': False, 'error': 'No metadata rows found. Provide rows, reportName+pbipFolder, or metadataFilePath.'}), 400
+
         result = classify_rows(rows)
+        write_audit_event('connectors_detect', {
+            'rows': len(rows),
+            'report': payload.get('reportName') or '',
+            'multi_source': result.get('summary', {}).get('is_multi_source', False),
+        })
         return jsonify({'success': True, **result})
     except Exception as e:
+        write_audit_event('connectors_detect', {'status': 'failed', 'error': str(e)})
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1322,8 +1390,11 @@ def transform_preview():
         source_type = payload.get('source_type') or 'Unknown'
         target_type = payload.get('target_type') or ''
         mapping = payload.get('mapping') or {}
-        rows = payload.get('rows')
+        rows = payload.get('rows') if isinstance(payload.get('rows'), list) else resolve_request_rows(payload)
         query = payload.get('query') or ''
+
+        if not query and (not isinstance(rows, list) or len(rows) == 0):
+            return jsonify({'success': False, 'error': 'Provide query, rows, or report metadata lookup fields.'}), 400
 
         pre = pre_validate_request({
             'source_type': source_type,
@@ -1335,12 +1406,22 @@ def transform_preview():
 
         if isinstance(rows, list):
             transformed_rows = transformation_engine.transform_rows(rows, target_type, mapping)
+            detected_types = sorted(list(set(
+                row.get('detectedSourceType') or row.get('sourceConnectorType') or 'Unknown'
+                for row in transformed_rows
+            )))
             write_audit_event('transform_preview_batch', {
                 'source_type': source_type,
                 'target_type': target_type,
                 'rows': len(transformed_rows),
             })
-            return jsonify({'success': True, 'rows': transformed_rows, 'warnings': pre.get('warnings', [])})
+            return jsonify({
+                'success': True,
+                'detected_source_types': detected_types,
+                'target_type': target_type,
+                'rows': transformed_rows,
+                'warnings': pre.get('warnings', []),
+            })
 
         req = TransformationRequest(
             source_type=source_type,
@@ -1357,13 +1438,14 @@ def transform_preview():
         })
         return jsonify({
             'success': result.success,
-            'source_type': source_type,
+            'detected_source_type': result.source_type,
             'target_type': target_type,
             'transformed_query': result.transformed_query,
             'warnings': result.warnings + post.get('warnings', []),
             'errors': result.errors + post.get('errors', []),
         })
     except Exception as e:
+        write_audit_event('transform_preview_single', {'status': 'failed', 'error': str(e)})
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1400,11 +1482,18 @@ def migration_batch():
         target_type = payload.get('target_type') or ''
         mapping = payload.get('mapping') or {}
 
+        if not isinstance(items, list) or len(items) == 0:
+            return jsonify({'success': False, 'error': 'items must be a non-empty list'}), 400
+
+        if operation not in {'detect', 'transform_preview'}:
+            return jsonify({'success': False, 'error': 'operation must be detect or transform_preview'}), 400
+
         def _run(item):
-            rows = item.get('rows') or []
+            rows = item.get('rows') or resolve_request_rows(item)
             if operation == 'transform_preview':
                 return {
-                    'rows': transformation_engine.transform_rows(rows, target_type, mapping)
+                    'rows': transformation_engine.transform_rows(rows, target_type, mapping),
+                    'row_count': len(rows),
                 }
             return classify_rows(rows)
 
@@ -1417,6 +1506,27 @@ def migration_batch():
         })
         return jsonify({'success': True, **result})
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/migration/run', methods=['POST'])
+def run_connector_migration_flow():
+    """Run full migration service: extract -> detect -> transform -> validate."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        file_path = payload.get('file_path')
+        target_config = payload.get('target_config') or {}
+
+        result = full_migration_service.run_full_migration(file_path, target_config)
+        write_audit_event('migration_run', {
+            'file_path': file_path or '',
+            'target_type': (target_config or {}).get('target_type', ''),
+            'success': result.get('success', False),
+        })
+        status_code = 200 if result.get('success') else 400
+        return jsonify(result), status_code
+    except Exception as e:
+        write_audit_event('migration_run', {'status': 'failed', 'error': str(e)})
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

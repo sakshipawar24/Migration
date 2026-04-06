@@ -1,20 +1,18 @@
-import re
 from typing import Dict, Any
 from .base import BaseConnector
+from migration_engine.parser.m_query_parser import parse_connector_metadata
 
 
 class SQLConnector(BaseConnector):
     connector_type = "SQLServer"
 
     def extract_metadata(self, query: str) -> Dict[str, Any]:
-        sql_quoted = re.search(r"Sql\.Database\s*\(\s*\"([^\"]+)\"\s*,\s*\"([^\"]+)\"", query or "", re.IGNORECASE)
-        if sql_quoted:
-            return {
-                "connector_type": self.connector_type,
-                "server": sql_quoted.group(1),
-                "database": sql_quoted.group(2),
-            }
-        return {"connector_type": self.connector_type, "server": "", "database": ""}
+        metadata = parse_connector_metadata(query or "")
+        return {
+            "connector_type": self.connector_type,
+            "server": metadata.get("server", ""),
+            "database": metadata.get("database", ""),
+        }
 
     def transform_connection(self, config: Dict[str, Any]) -> Dict[str, Any]:
         return {

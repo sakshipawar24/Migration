@@ -5,6 +5,7 @@ function MetadataPage({
   selectedReport, handleReportSelection,
   pbixReports,
   metadataBefore, metadataAfter,
+  migrationInsights,
   statusMessage, statusType,
   targetTechnology
 }) {
@@ -34,6 +35,7 @@ function MetadataPage({
         <MetadataComparisonComponent
           externalBeforeData={metadataBefore}
           externalAfterData={metadataAfter}
+          migrationInsights={migrationInsights}
           selectedReport={selectedReport}
           targetTechnology={targetTechnology}
         />

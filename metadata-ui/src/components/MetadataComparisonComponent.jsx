@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
+import ConnectorTypeBadge from "./migration/ConnectorTypeBadge";
 
 function MetadataComparisonComponent({
   externalBeforeData,
   externalAfterData,
+  migrationInsights,
   selectedReport,
   targetTechnology
 }) {
@@ -35,12 +37,17 @@ function MetadataComparisonComponent({
   }, [beforeData, selectedReport]);
 
   const filteredAfter = useMemo(() => {
+    const previewRows = Array.isArray(migrationInsights?.previewRows) ? migrationInsights.previewRows : [];
+    const effectiveAfter = (afterData && afterData.length > 0) ? afterData : previewRows;
     if (!selectedReport || selectedReport === "All") {
-      return afterData;
+      return effectiveAfter;
     }
 
-    return afterData.filter((row) => matchesReport(row, selectedReport));
-  }, [afterData, selectedReport]);
+    return effectiveAfter.filter((row) => matchesReport(row, selectedReport));
+  }, [afterData, migrationInsights, selectedReport]);
+
+  const warningMessages = migrationInsights?.warnings || [];
+  const errorMessages = migrationInsights?.errors || [];
 
   const closeModal = () => {
     setQueryModal({ isOpen: false, query: "", title: "" });
@@ -90,6 +97,7 @@ function MetadataComparisonComponent({
                 <tr>
                   <th>Type</th>
                   <th>Name</th>
+                  <th>Connector</th>
                   <th>Mode</th>
                   <th>Source</th>
                   <th>Connection Type</th>
@@ -108,6 +116,7 @@ function MetadataComparisonComponent({
                     <tr key={row.name}>
                       <td>Table</td>
                       <td>{tableName}</td>
+                      <td><ConnectorTypeBadge connectorType={row.sourceConnectorType || row.detectedSourceType || row.connectionType || "Unknown"} /></td>
                       <td>{row.mode || ""}</td>
                       <td>{row.source || ""}</td>
                       <td>{row.connectionType || ""}</td>
@@ -144,6 +153,7 @@ function MetadataComparisonComponent({
                 <tr>
                   <th>Type</th>
                   <th>Name</th>
+                  <th>Connector</th>
                   <th>Mode</th>
                   <th>Source</th>
                   <th>Connection Type</th>
@@ -161,6 +171,7 @@ function MetadataComparisonComponent({
                   <tr key={row.name}>
                     <td>Table</td>
                     <td>{getRowTableName(row)}</td>
+                    <td><ConnectorTypeBadge connectorType={row.targetConnectorType || row.sourceConnectorType || row.detectedSourceType || row.connectionType || "Unknown"} /></td>
                     <td>{getAfterValue("mode", row.mode)}</td>
                     <td>{getAfterValue("source", row.source)}</td>
                     <td>{getAfterValue("connectionType", row.connectionType)}</td>
@@ -186,6 +197,17 @@ function MetadataComparisonComponent({
           )}
         </div>
       </div>
+
+      {warningMessages.length > 0 && (
+        <div className="status-banner warning" style={{ marginTop: 14 }}>
+          {warningMessages.join(' | ')}
+        </div>
+      )}
+      {errorMessages.length > 0 && (
+        <div className="status-banner error" style={{ marginTop: 14 }}>
+          {errorMessages.join(' | ')}
+        </div>
+      )}
 
       {queryModal.isOpen && (
         <div className="modal-overlay" onClick={closeModal} role="presentation">
