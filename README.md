@@ -60,3 +60,9 @@ Optional flags:
 # Install dependencies only
 ./scripts/bootstrap.ps1 -InstallOnly
 ```
+
+## Tester Documentation
+
+For client-side testing setup and validation steps, see:
+
+- [TECHNICAL_SETUP_FOR_TESTERS.md](TECHNICAL_SETUP_FOR_TESTERS.md)
