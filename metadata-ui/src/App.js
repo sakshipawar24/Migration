@@ -1342,10 +1342,18 @@ const changeConnection = async (reportName = null) => {
     });
 
     const rows = Array.from(reportMap.values()).map((reportRow) => {
+      const trackerKey = normalizeReportKey(reportRow.reportName || reportRow.displayName);
+      const trackerEntry = reportTrackerStatus[trackerKey] || {};
+
+      const persistedBeforeCount = Number.parseInt(trackerEntry.metadataBeforeCount, 10) || 0;
+      const persistedAfterCount = Number.parseInt(trackerEntry.metadataAfterCount, 10) || 0;
+      const metadataBeforeCount = Math.max(reportRow.metadataBeforeCount || 0, persistedBeforeCount);
+      const metadataAfterCount = Math.max(reportRow.metadataAfterCount || 0, persistedAfterCount);
+
       let workflowStatus = 'Detected';
-      if (reportRow.metadataAfterCount > 0) {
+      if (metadataAfterCount > 0) {
         workflowStatus = 'Connection updated';
-      } else if (reportRow.metadataBeforeCount > 0) {
+      } else if (metadataBeforeCount > 0) {
         workflowStatus = 'Metadata extracted';
       } else if (reportRow.converted) {
         workflowStatus = 'Converted';
@@ -1353,15 +1361,26 @@ const changeConnection = async (reportName = null) => {
         workflowStatus = 'Downloaded';
       }
 
-      const metrics = computeReportMetrics(reportRow.reportName || reportRow.displayName);
-      const complexity = getComplexityLabel(metrics);
+      const liveMetrics = computeReportMetrics(reportRow.reportName || reportRow.displayName);
+      const persistedMetrics = {
+        tableCount: Number.parseInt(trackerEntry.tableCount, 10) || 0,
+        connectionCount: Number.parseInt(trackerEntry.connectionCount, 10) || 0,
+        sqlQueryCount: Number.parseInt(trackerEntry.sqlQueryCount, 10) || 0
+      };
+
+      const hasLiveMetrics = (liveMetrics.tableCount + liveMetrics.connectionCount + liveMetrics.sqlQueryCount) > 0;
+      const hasPersistedMetrics = (persistedMetrics.tableCount + persistedMetrics.connectionCount + persistedMetrics.sqlQueryCount) > 0;
+      const metrics = hasLiveMetrics ? liveMetrics : (hasPersistedMetrics ? persistedMetrics : liveMetrics);
+      const complexity = (hasLiveMetrics || hasPersistedMetrics)
+        ? getComplexityLabel(metrics)
+        : (trackerEntry.complexity || getComplexityLabel(metrics));
 
       const validationIssues = [];
-      const shouldValidate = reportRow.converted || reportRow.metadataBeforeCount > 0 || reportRow.metadataAfterCount > 0;
+      const shouldValidate = reportRow.converted || metadataBeforeCount > 0 || metadataAfterCount > 0;
       if (shouldValidate && metrics.tableCount === 0) {
         validationIssues.push('No table metadata');
       }
-      if (reportRow.metadataBeforeCount > 0 && metrics.connectionCount === 0) {
+      if (metadataBeforeCount > 0 && metrics.connectionCount === 0) {
         validationIssues.push('No connection details parsed');
       }
 
@@ -1370,7 +1389,6 @@ const changeConnection = async (reportName = null) => {
         ? `${workflowStatus} | ${complexity} complexity`
         : `${workflowStatus} | ${complexity} complexity | Validate: ${validationIssues.join('; ')}`;
 
-      const trackerEntry = reportTrackerStatus[normalizeReportKey(reportRow.reportName || reportRow.displayName)] || {};
       let trackerPublishStatus = trackerEntry.publishStatus || 'Not started';
       let trackerRefreshStatus = trackerEntry.refreshStatus || 'Not started';
 
@@ -1392,6 +1410,8 @@ const changeConnection = async (reportName = null) => {
 
       return {
         ...reportRow,
+        metadataBeforeCount,
+        metadataAfterCount,
         tableCount: metrics.tableCount,
         connectionCount: metrics.connectionCount,
         sqlQueryCount: metrics.sqlQueryCount,
@@ -1415,6 +1435,50 @@ const changeConnection = async (reportName = null) => {
     refreshStatus,
     reportTrackerStatus
   ]);
+
+  useEffect(() => {
+    if (!isStorageHydrated || reportStatusRows.length === 0) {
+      return;
+    }
+
+    setReportTrackerStatus((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      reportStatusRows.forEach((row) => {
+        const key = normalizeReportKey(row.reportName || row.displayName);
+        if (!key) {
+          return;
+        }
+
+        const existing = next[key] || {};
+        const merged = {
+          ...existing,
+          metadataBeforeCount: Math.max(Number.parseInt(existing.metadataBeforeCount, 10) || 0, row.metadataBeforeCount || 0),
+          metadataAfterCount: Math.max(Number.parseInt(existing.metadataAfterCount, 10) || 0, row.metadataAfterCount || 0),
+          tableCount: Math.max(Number.parseInt(existing.tableCount, 10) || 0, row.tableCount || 0),
+          connectionCount: Math.max(Number.parseInt(existing.connectionCount, 10) || 0, row.connectionCount || 0),
+          sqlQueryCount: Math.max(Number.parseInt(existing.sqlQueryCount, 10) || 0, row.sqlQueryCount || 0),
+          complexity: row.complexity || existing.complexity || 'Low'
+        };
+
+        const hasDelta =
+          merged.metadataBeforeCount !== existing.metadataBeforeCount ||
+          merged.metadataAfterCount !== existing.metadataAfterCount ||
+          merged.tableCount !== existing.tableCount ||
+          merged.connectionCount !== existing.connectionCount ||
+          merged.sqlQueryCount !== existing.sqlQueryCount ||
+          merged.complexity !== existing.complexity;
+
+        if (hasDelta) {
+          next[key] = merged;
+          changed = true;
+        }
+      });
+
+      return changed ? next : prev;
+    });
+  }, [isStorageHydrated, reportStatusRows]);
 
   const formatStatusLabel = (status) => {
     if (status === 'running') {
