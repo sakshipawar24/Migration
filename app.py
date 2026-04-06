@@ -250,6 +250,7 @@ def load_run_all_metadata(pbip_folder):
             payload = json.loads(metadata_file.read_text(encoding='utf-8'))
             before = payload.get('before', [])
             after = payload.get('after', [])
+            after = sanitize_after_metadata_queries(after)
 
             for row in before:
                 row_name = row.get('name') or ''
@@ -456,8 +457,13 @@ def sanitize_after_metadata_queries(after_rows, target_technology=None, server=N
             row['server'] = resolved_server
             row['database'] = resolved_database
 
+        # Overwrite all common query fields so no original query text remains in AFTER metadata.
         row['mQuery'] = sanitized_query
         row['M_Query_Preview'] = sanitized_query
+        if 'query' in row:
+            row['query'] = sanitized_query
+        if 'sqlQuery' in row:
+            row['sqlQuery'] = sanitized_query
 
     return after_rows
 
