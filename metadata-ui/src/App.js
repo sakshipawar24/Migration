@@ -1305,6 +1305,7 @@ const changeConnection = async (reportName = null) => {
     const beforeRows = Array.isArray(cacheEntry.before) ? cacheEntry.before : [];
     const afterRows = Array.isArray(cacheEntry.after) ? cacheEntry.after : [];
     const activeRows = afterRows.length > 0 ? afterRows : beforeRows;
+    const queryRows = beforeRows.length > 0 ? beforeRows : activeRows;
 
     const tableNames = new Set();
     const uniqueConnections = new Set(); // Count unique server:database combinations
@@ -1346,7 +1347,11 @@ const changeConnection = async (reportName = null) => {
           uniqueConnections.add(connectionType);
         }
       }
+    });
 
+    // AFTER metadata intentionally sanitizes query text to protect original SQL.
+    // Count query complexity from BEFORE rows so complexity does not collapse to 1.
+    queryRows.forEach((row) => {
       const queryText = String(extractMetricValue(row, ['mQuery', 'M_Query_Preview', 'query'])).trim();
       if (queryText) {
         querySignatures.add(queryText);
