@@ -937,7 +937,7 @@ function App() {
         markTrackerStatusForReports(pendingReports, 'publishStatus', 'Success');
         markTrackerStatusForReports(pendingReports, 'refreshStatus', 'Not started');
       } else if (!shouldReplaceExisting && typeof data.error === 'string' && data.error.toLowerCase().includes('existing reports found')) {
-        const shouldReplace = window.confirm(`${data.error}\n\nReplace the existing report(s) and publish again?`);
+        const shouldReplace = window.confirm('Do you want to replace existing reports and publish again?');
         if (shouldReplace) {
           await publishPbix(true);
         } else {
@@ -1199,7 +1199,7 @@ const changeConnection = async (reportName = null) => {
         fetchPbipReports();
         fetchPbixReports();
       } else if (!shouldReplaceExisting && typeof data.error === 'string' && data.error.toLowerCase().includes('existing reports found')) {
-        const shouldReplace = window.confirm(`${data.error}\n\nReplace the existing report(s) and run the full migration again?`);
+        const shouldReplace = window.confirm('Do you want to replace existing reports and run the full migration again?');
         if (shouldReplace) {
           await runFullFlow(true);
         } else {
