@@ -7,7 +7,8 @@ function MetadataPage({
   metadataBefore, metadataAfter,
   migrationInsights,
   statusMessage, statusType,
-  targetTechnology
+  targetTechnology,
+  reportRefreshSchedule
 }) {
   return (
     <div className="page metadata-page">
@@ -28,6 +29,11 @@ function MetadataPage({
               <option key={option.name} value={option.name}>{option.displayName || option.name}</option>
             ))}
           </select>
+          {selectedReport && (
+            <div className="helper-text" style={{ marginTop: '10px', color: '#9ca3af' }}>
+              Refresh schedule: {reportRefreshSchedule || 'Not configured'}
+            </div>
+          )}
         </div>
       </div>
 

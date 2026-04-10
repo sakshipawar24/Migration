@@ -19,8 +19,11 @@ param(
     [Parameter()][string]$LakehouseId = "dummy_lakehouse_id",
     [Parameter()][string]$ReportNames = "",
     [Parameter()][switch]$UsePython,
+    [Parameter()][switch]$ReplaceExisting,
     [Parameter()][ValidateSet('download','convert','publish','refresh','all')][string]$Action = "all"
 )
+
+$ShouldReplaceExisting = $ReplaceExisting.IsPresent -or ($env:POWERBI_REPLACE_EXISTING -eq '1')
 
 function ConvertTo-ReportNameKey {
     param([string]$Name)
@@ -211,17 +214,69 @@ if ($Action -eq "publish" -or $Action -eq "all") {
         throw "No PBIX files found to publish in $PbixFolder."
     }
 
-    Get-ChildItem "$PbixFolder\*.pbix" | ForEach-Object {
+    $targetReportsResponse = Invoke-RestMethod `
+        -Method Get `
+        -Uri "https://api.powerbi.com/v1.0/myorg/groups/$TargetWorkspace/reports" `
+        -Headers $headers
 
-        if (-not (Test-ReportSelection $_.BaseName)) {
-            Write-Host "Skipping $($_.Name) (already completed)."
-            return
+    $existingTargetReports = @{}
+    foreach ($report in @($targetReportsResponse.value)) {
+        $normalizedName = ConvertTo-ReportNameKey $report.name
+        if (-not [string]::IsNullOrWhiteSpace($normalizedName) -and -not $existingTargetReports.ContainsKey($normalizedName)) {
+            $existingTargetReports[$normalizedName] = $report
+        }
+    }
+
+    $pendingPublishItems = Get-ChildItem "$PbixFolder\*.pbix" | Where-Object { Test-ReportSelection $_.BaseName }
+    $conflictingReports = @()
+
+    foreach ($item in $pendingPublishItems) {
+        $normalizedReportName = ConvertTo-ReportNameKey $item.BaseName
+        if ($existingTargetReports.ContainsKey($normalizedReportName)) {
+            $conflictingReports += $existingTargetReports[$normalizedReportName].name
+        }
+    }
+
+    if ($conflictingReports.Count -gt 0 -and -not $ShouldReplaceExisting) {
+        $uniqueConflicts = $conflictingReports | Sort-Object -Unique
+        throw "Existing reports found in the target workspace: $($uniqueConflicts -join ', '). Re-run with ReplaceExisting to overwrite them."
+    }
+
+    if ($conflictingReports.Count -gt 0 -and $ShouldReplaceExisting) {
+        $uniqueConflicts = $conflictingReports | Sort-Object -Unique
+        Write-Host "Replacing existing reports: $($uniqueConflicts -join ', ')"
+
+        foreach ($reportName in $uniqueConflicts) {
+            $reportToDelete = $existingTargetReports.GetEnumerator() | Where-Object { $_.Value.name -eq $reportName } | Select-Object -First 1
+            if ($null -ne $reportToDelete.Value) {
+                Write-Host "Deleting existing report $reportName..."
+                Invoke-RestMethod `
+                    -Method Delete `
+                    -Uri "https://api.powerbi.com/v1.0/myorg/groups/$TargetWorkspace/reports/$($reportToDelete.Value.id)" `
+                    -Headers $headers | Out-Null
+            }
+        }
+    }
+
+    $pendingPublishItems | ForEach-Object {
+
+        $reportDisplayName = $_.BaseName
+        $normalizedReportName = ConvertTo-ReportNameKey $_.BaseName
+        $existingReport = $null
+        if ($existingTargetReports.ContainsKey($normalizedReportName)) {
+            $existingReport = $existingTargetReports[$normalizedReportName]
+            if ($existingReport -and -not [string]::IsNullOrWhiteSpace($existingReport.name)) {
+                $reportDisplayName = $existingReport.name
+            }
         }
 
         $name = $_.Name
-        Write-Host "Publishing $name..."
+        Write-Host "Publishing $reportDisplayName..."
 
-        $uri = "https://api.powerbi.com/v1.0/myorg/groups/$TargetWorkspace/imports?datasetDisplayName=$name"
+        $uri = "https://api.powerbi.com/v1.0/myorg/groups/$TargetWorkspace/imports?datasetDisplayName=$([System.Uri]::EscapeDataString($reportDisplayName))"
+        if ($ShouldReplaceExisting) {
+            $uri += "&nameConflict=Overwrite"
+        }
 
         $fileStream = [System.IO.File]::OpenRead($_.FullName)
 

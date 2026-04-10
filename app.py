@@ -10,6 +10,9 @@ import re
 import os
 import subprocess
 import json
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from werkzeug.utils import secure_filename
 import shutil
@@ -226,6 +229,23 @@ def run_power_bi_action(action, data, timeout=900):
     transformed_pbix_folder = data.get('transformedPbixFolder') if data else None
     report_names = data.get('reportNames') if data else None
     use_python = bool(data.get('usePython')) if data else False
+    replace_existing = bool(data.get('replaceExisting')) if data else False
+
+    if action in {'publish', 'all'} and replace_existing:
+        try:
+            deleted_reports = _delete_existing_power_bi_reports(
+                tenant_id,
+                client_id,
+                client_secret,
+                target_workspace_id,
+                report_names if isinstance(report_names, list) else []
+            )
+            if deleted_reports:
+                print(f"Deleted existing reports before publish: {', '.join(deleted_reports)}")
+        except urllib.error.HTTPError as http_err:
+            return None, f'Failed to delete existing target reports: {http_err.code} {http_err.reason}'
+        except Exception as delete_err:
+            return None, f'Failed to delete existing target reports: {delete_err}'
 
     if server:
         args.append(f"-Server '{server}'")
@@ -245,6 +265,9 @@ def run_power_bi_action(action, data, timeout=900):
             args.append(f"-ReportNames '{joined}'")
     if use_python:
         args.append("-UsePython")
+    if replace_existing:
+        args.append("-ReplaceExisting")
+        env_override['POWERBI_REPLACE_EXISTING'] = '1'
 
     command = f"& '{POWER_BI_SCRIPT.resolve()}' " + ' '.join(args)
     result = run_powershell(command, env_override=env_override, timeout=timeout)
@@ -593,6 +616,158 @@ def run_node_script(script_path, args=None, timeout=300):
         timeout=timeout
     )
     return result
+
+
+def _normalize_report_name_for_conflict(report_name):
+    if not report_name:
+        return ''
+    return str(report_name).strip().lower()
+
+
+def _get_power_bi_access_token(tenant_id, client_id, client_secret):
+    token_url = f'https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token'
+    payload = urllib.parse.urlencode({
+        'grant_type': 'client_credentials',
+        'scope': 'https://analysis.windows.net/powerbi/api/.default',
+        'client_id': client_id,
+        'client_secret': client_secret
+    }).encode('utf-8')
+
+    request = urllib.request.Request(token_url, data=payload, method='POST')
+    request.add_header('Content-Type', 'application/x-www-form-urlencoded')
+
+    with urllib.request.urlopen(request, timeout=60) as response:
+        token_response = json.loads(response.read().decode('utf-8'))
+
+    access_token = token_response.get('access_token')
+    if not access_token:
+        raise RuntimeError('Unable to acquire Power BI access token.')
+    return access_token
+
+
+def _delete_existing_power_bi_reports(tenant_id, client_id, client_secret, target_workspace_id, report_names):
+    cleaned_names = [str(name).strip() for name in (report_names or []) if str(name).strip()]
+    if not cleaned_names or not target_workspace_id:
+        return []
+
+    access_token = _get_power_bi_access_token(tenant_id, client_id, client_secret)
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+
+    reports_request = urllib.request.Request(
+        f'https://api.powerbi.com/v1.0/myorg/groups/{target_workspace_id}/reports',
+        headers=headers,
+        method='GET'
+    )
+
+    with urllib.request.urlopen(reports_request, timeout=60) as response:
+        reports_payload = json.loads(response.read().decode('utf-8'))
+
+    report_name_set = {_normalize_report_name_for_conflict(name) for name in cleaned_names}
+    deleted_reports = []
+
+    for report in reports_payload.get('value') or []:
+        report_name = _normalize_report_name_for_conflict(report.get('name'))
+        if report_name not in report_name_set:
+            continue
+
+        report_id = report.get('id')
+        if not report_id:
+            continue
+
+        delete_request = urllib.request.Request(
+            f'https://api.powerbi.com/v1.0/myorg/groups/{target_workspace_id}/reports/{report_id}',
+            headers=headers,
+            method='DELETE'
+        )
+
+        with urllib.request.urlopen(delete_request, timeout=60):
+            pass
+
+        deleted_reports.append(report.get('name') or report_id)
+
+    return deleted_reports
+
+
+def _summarize_refresh_schedule(schedule_payload):
+    if not isinstance(schedule_payload, dict):
+        return 'Not configured'
+
+    enabled = bool(schedule_payload.get('enabled'))
+    if not enabled:
+        return 'Disabled'
+
+    days = schedule_payload.get('days') or []
+    times = schedule_payload.get('times') or []
+    timezone = schedule_payload.get('localTimeZoneId') or schedule_payload.get('timeZoneId') or ''
+
+    day_text = ', '.join(str(day) for day in days if str(day).strip()) if days else 'Every day'
+    time_text = ', '.join(str(time_item) for time_item in times if str(time_item).strip()) if times else 'unspecified time'
+    timezone_text = f' ({timezone})' if timezone else ''
+
+    return f'{day_text} at {time_text}{timezone_text}'
+
+
+def _fetch_workspace_report_schedules(tenant_id, client_id, client_secret, workspace_id):
+    if not tenant_id or not client_id or not client_secret or not workspace_id:
+        return {}
+
+    access_token = _get_power_bi_access_token(tenant_id, client_id, client_secret)
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+
+    reports_request = urllib.request.Request(
+        f'https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports',
+        headers=headers,
+        method='GET'
+    )
+
+    with urllib.request.urlopen(reports_request, timeout=60) as response:
+        reports_payload = json.loads(response.read().decode('utf-8'))
+
+    schedules = {}
+    for report in reports_payload.get('value') or []:
+        report_name = normalize_report_name(report.get('name'))
+        report_key = _normalize_report_name_for_conflict(report_name)
+        if not report_name or not report_key:
+            continue
+
+        schedule_payload = {}
+        schedule_summary = 'Not configured'
+        dataset_id = report.get('datasetId')
+
+        if dataset_id:
+            try:
+                schedule_request = urllib.request.Request(
+                    f'https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}/refreshSchedule',
+                    headers=headers,
+                    method='GET'
+                )
+                with urllib.request.urlopen(schedule_request, timeout=60) as schedule_response:
+                    schedule_payload = json.loads(schedule_response.read().decode('utf-8'))
+                schedule_summary = _summarize_refresh_schedule(schedule_payload)
+            except urllib.error.HTTPError as http_err:
+                if http_err.code in {400, 404}:
+                    schedule_summary = 'Not configured'
+                else:
+                    schedule_summary = f'Unavailable ({http_err.code})'
+            except Exception:
+                schedule_summary = 'Unavailable'
+
+        schedules[report_key] = {
+            'name': report_name,
+            'displayName': report.get('name') or report_name,
+            'datasetId': dataset_id,
+            'refreshSchedule': schedule_summary,
+            'refreshScheduleEnabled': bool(schedule_payload.get('enabled')) if isinstance(schedule_payload, dict) else False,
+            'refreshScheduleDetails': schedule_payload if isinstance(schedule_payload, dict) else {}
+        }
+
+    return schedules
 
 
 @app.route('/api/upload-pbip', methods=['POST'])
@@ -1102,12 +1277,44 @@ def refresh_datasets():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/pbi/report-schedules', methods=['GET'])
+def report_schedules():
+    """List refresh schedules for reports in a workspace."""
+    try:
+        workspace_id = request.args.get('workspaceId') or app_state.get('pbi_target_workspace_id')
+        tenant_id = app_state.get('pbi_tenant_id') or os.environ.get('POWERBI_TENANT_ID') or os.environ.get('PBI_TENANT_ID')
+        client_id = app_state.get('pbi_client_id') or os.environ.get('POWERBI_CLIENT_ID') or os.environ.get('PBI_CLIENT_ID')
+        client_secret = app_state.get('pbi_client_secret') or os.environ.get('POWERBI_CLIENT_SECRET') or os.environ.get('PBI_CLIENT_SECRET')
+
+        if not workspace_id:
+            return jsonify({'success': True, 'workspaceId': '', 'schedules': []})
+
+        if not tenant_id or not client_id or not client_secret:
+            return jsonify({'success': False, 'error': 'Power BI credentials are required to read refresh schedules.'}), 400
+
+        schedule_map = _fetch_workspace_report_schedules(tenant_id, client_id, client_secret, workspace_id)
+        schedules = sorted(schedule_map.values(), key=lambda item: str(item.get('displayName') or item.get('name') or '').lower())
+
+        return jsonify({'success': True, 'workspaceId': workspace_id, 'schedules': schedules})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/pbi/list-reports', methods=['GET'])
 def list_reports():
     """List available PBIP reports from the PBIP folder"""
     try:
         pbip_folder = resolve_pbip_folder(request.args.get('pbipFolder'))
         pbip_path = Path(pbip_folder)
+        workspace_id = request.args.get('workspaceId') or app_state.get('pbi_target_workspace_id')
+        tenant_id, client_id, client_secret = get_power_bi_env()
+        schedule_map = {}
+
+        if workspace_id and tenant_id and client_id and client_secret:
+            try:
+                schedule_map = _fetch_workspace_report_schedules(tenant_id, client_id, client_secret, workspace_id)
+            except Exception:
+                schedule_map = {}
         
         if not pbip_path.exists():
             return jsonify({'success': True, 'reports': []})
@@ -1117,10 +1324,12 @@ def list_reports():
             if item.is_dir() and not item.name.startswith('_'):
                 report_name = normalize_report_name(item.name)
                 if report_name:
+                    schedule_entry = schedule_map.get(_normalize_report_name_for_conflict(report_name), {})
                     reports.append({
                         'name': report_name,
                         'displayName': report_name,
-                        'folder': item.name
+                        'folder': item.name,
+                        'refreshSchedule': schedule_entry.get('refreshSchedule') or 'Not configured'
                     })
         
         # Sort reports alphabetically
@@ -1137,6 +1346,15 @@ def list_pbix_reports():
     try:
         pbix_folder = request.args.get('pbixFolder') or r"D:\PBIX"
         pbix_path = Path(pbix_folder)
+        workspace_id = request.args.get('workspaceId') or app_state.get('pbi_target_workspace_id')
+        tenant_id, client_id, client_secret = get_power_bi_env()
+        schedule_map = {}
+
+        if workspace_id and tenant_id and client_id and client_secret:
+            try:
+                schedule_map = _fetch_workspace_report_schedules(tenant_id, client_id, client_secret, workspace_id)
+            except Exception:
+                schedule_map = {}
 
         if not pbix_path.exists():
             return jsonify({'success': True, 'reports': []})
@@ -1145,10 +1363,12 @@ def list_pbix_reports():
         for item in pbix_path.glob('*.pbix'):
             report_name = normalize_report_name(item.stem)
             if report_name:
+                schedule_entry = schedule_map.get(_normalize_report_name_for_conflict(report_name), {})
                 reports.append({
                     'name': report_name,
                     'displayName': report_name,
-                    'file': item.name
+                    'file': item.name,
+                    'refreshSchedule': schedule_entry.get('refreshSchedule') or 'Not configured'
                 })
 
         reports.sort(key=lambda x: x['name'])
@@ -1165,6 +1385,17 @@ def extract_report_metadata():
         data = request.get_json()
         report_name = data.get('reportName')
         pbip_folder = resolve_pbip_folder(data.get('pbipFolder'))
+        workspace_id = data.get('workspaceId') or app_state.get('pbi_target_workspace_id')
+        tenant_id, client_id, client_secret = get_power_bi_env()
+        report_refresh_schedule = 'Not configured'
+
+        if report_name and workspace_id and tenant_id and client_id and client_secret:
+            try:
+                schedule_map = _fetch_workspace_report_schedules(tenant_id, client_id, client_secret, workspace_id)
+                schedule_entry = schedule_map.get(_normalize_report_name_for_conflict(report_name), {})
+                report_refresh_schedule = schedule_entry.get('refreshSchedule') or 'Not configured'
+            except Exception:
+                report_refresh_schedule = 'Not configured'
         
         if not report_name:
             return jsonify({'success': False, 'error': 'Report name is required'}), 400
@@ -1203,17 +1434,20 @@ def extract_report_metadata():
                         for row in before:
                             row['reportName'] = report_name
                             row['reportDisplay'] = report_name
+                            row['refreshSchedule'] = report_refresh_schedule
                             normalize_connector_fields(row)
                         for row in after:
                             row['reportName'] = report_name
                             row['reportDisplay'] = report_name
+                            row['refreshSchedule'] = report_refresh_schedule
                             normalize_connector_fields(row)
                         
                         return jsonify({
                             'success': True,
                             'before': before,
                             'after': after,
-                            'source': 'metadata_file'
+                            'source': 'metadata_file',
+                            'refreshSchedule': report_refresh_schedule
                         })
                     except Exception as e:
                         print(f"Error reading metadata file: {e}")
@@ -1254,6 +1488,7 @@ def extract_report_metadata():
                         for row in tables:
                             row['reportName'] = report_name
                             row['reportDisplay'] = report_name
+                            row['refreshSchedule'] = report_refresh_schedule
                             normalize_connector_fields(row)
                         
                         # Save the extracted metadata to _metadata folder
@@ -1272,7 +1507,8 @@ def extract_report_metadata():
                             'success': True,
                             'before': tables,
                             'after': [],
-                            'source': 'fresh_extraction'
+                            'source': 'fresh_extraction',
+                            'refreshSchedule': report_refresh_schedule
                         })
                     except json.JSONDecodeError as e:
                         return jsonify({'success': False, 'error': f'Failed to parse metadata JSON: {str(e)}'}), 500
@@ -1283,6 +1519,7 @@ def extract_report_metadata():
                 'before': [],
                 'after': [],
                 'source': 'empty',
+                'refreshSchedule': report_refresh_schedule,
                 'message': 'Metadata extraction script not found or failed'
             })
             

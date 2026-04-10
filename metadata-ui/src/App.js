@@ -465,8 +465,11 @@ function App() {
   const fetchPbipReports = useCallback(async () => {
     try {
       const pbipFolder = getPbipFolderPath(pbixFolder);
+      const workspaceQuery = targetWorkspaceId
+        ? `&workspaceId=${encodeURIComponent(targetWorkspaceId)}`
+        : '';
       const response = await fetch(
-        `http://localhost:5000/api/pbi/list-reports?pbipFolder=${encodeURIComponent(pbipFolder)}`
+        `http://localhost:5000/api/pbi/list-reports?pbipFolder=${encodeURIComponent(pbipFolder)}${workspaceQuery}`
       );
       const data = await response.json();
       if (data.success && data.reports) {
@@ -477,12 +480,15 @@ function App() {
       console.error('Failed to fetch reports:', err);
     }
     return [];
-  }, [getPbipFolderPath, pbixFolder]);
+  }, [getPbipFolderPath, pbixFolder, targetWorkspaceId]);
 
   const fetchPbixReports = useCallback(async () => {
     try {
+      const workspaceQuery = targetWorkspaceId
+        ? `&workspaceId=${encodeURIComponent(targetWorkspaceId)}`
+        : '';
       const response = await fetch(
-        `http://localhost:5000/api/pbi/list-pbix?pbixFolder=${encodeURIComponent(pbixFolder || 'D:\\PBIX')}`
+        `http://localhost:5000/api/pbi/list-pbix?pbixFolder=${encodeURIComponent(pbixFolder || 'D:\\PBIX')}${workspaceQuery}`
       );
       const data = await response.json();
       if (data.success && data.reports) {
@@ -493,7 +499,7 @@ function App() {
       console.error('Failed to fetch PBIX reports:', err);
     }
     return [];
-  }, [pbixFolder]);
+  }, [pbixFolder, targetWorkspaceId]);
 
   const appendLogEntries = (setter, entries) => {
     if (!entries || entries.length === 0) {
@@ -561,7 +567,8 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reportName: reportName,
-          pbipFolder: pbipPath
+          pbipFolder: pbipPath,
+          workspaceId: targetWorkspaceId || undefined
         })
       });
       const data = await response.json();
@@ -639,7 +646,8 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reportName: reportName,
-          pbipFolder: pbipPath
+          pbipFolder: pbipPath,
+          workspaceId: targetWorkspaceId || undefined
         })
       });
       const data = await response.json();
@@ -893,12 +901,13 @@ function App() {
     }
   };
 
-  const publishPbix = async () => {
-    const pendingReports = getPendingReportNames('publishStatus');
+  const publishPbix = async (replaceExisting = false) => {
+    const shouldReplaceExisting = replaceExisting === true;
+    const pendingReports = knownReportNames;
     if (pendingReports.length === 0) {
-      showStatus('All reports are already published. Nothing remaining.', 'info');
-      setPublishStatus('success');
-      setPublishNote('All reports already published.');
+      showStatus('No reports found to publish.', 'info');
+      setPublishStatus('idle');
+      setPublishNote('No reports found.');
       return;
     }
 
@@ -916,7 +925,8 @@ function App() {
           reportNames: pendingReports,
           tenantId,
           clientId,
-          clientSecret
+          clientSecret,
+          replaceExisting: shouldReplaceExisting
         })
       });
       const data = await response.json();
@@ -925,6 +935,16 @@ function App() {
         setPublishStatus('success');
         setPublishNote(data.message || 'Publish completed.');
         markTrackerStatusForReports(pendingReports, 'publishStatus', 'Success');
+        markTrackerStatusForReports(pendingReports, 'refreshStatus', 'Not started');
+      } else if (!shouldReplaceExisting && typeof data.error === 'string' && data.error.toLowerCase().includes('existing reports found')) {
+        const shouldReplace = window.confirm(`${data.error}\n\nReplace the existing report(s) and publish again?`);
+        if (shouldReplace) {
+          await publishPbix(true);
+        } else {
+          showStatus('Publish cancelled. Existing reports were left unchanged.', 'info');
+          setPublishStatus('idle');
+          setPublishNote('Publish cancelled.');
+        }
       } else {
         showStatus(data.error || 'Publish failed.', 'error');
         setPublishStatus('error');
@@ -1116,7 +1136,8 @@ const changeConnection = async (reportName = null) => {
     }
   };
 
-  const runFullFlow = async () => {
+  const runFullFlow = async (replaceExisting = false) => {
+    const shouldReplaceExisting = replaceExisting === true;
     if (!sourceWorkspaceId || !targetWorkspaceId) {
       showStatus('Enter source and target workspace IDs.', 'error');
       return;
@@ -1139,7 +1160,8 @@ const changeConnection = async (reportName = null) => {
           lakehouseId: autoLakehouseId || undefined,
           tenantId,
           clientId,
-          clientSecret
+          clientSecret,
+          replaceExisting: shouldReplaceExisting
         })
       });
       const data = await response.json();
@@ -1176,6 +1198,14 @@ const changeConnection = async (reportName = null) => {
 
         fetchPbipReports();
         fetchPbixReports();
+      } else if (!shouldReplaceExisting && typeof data.error === 'string' && data.error.toLowerCase().includes('existing reports found')) {
+        const shouldReplace = window.confirm(`${data.error}\n\nReplace the existing report(s) and run the full migration again?`);
+        if (shouldReplace) {
+          await runFullFlow(true);
+        } else {
+          showStatus('Full migration cancelled. Existing reports were left unchanged.', 'info');
+          setRunAllOutput('');
+        }
       } else {
         showStatus(data.error || 'Full migration flow failed.', 'error');
         setRunAllOutput(data.output || '');
@@ -1420,9 +1450,13 @@ const changeConnection = async (reportName = null) => {
         converted: false,
         metadataBeforeCount: 0,
         metadataAfterCount: 0,
+        refreshSchedule: 'Not configured',
         workflowStatus: 'Not started'
       };
       existing.downloaded = true;
+      if (report.refreshSchedule) {
+        existing.refreshSchedule = report.refreshSchedule;
+      }
       reportMap.set(reportKey, existing);
     });
 
@@ -1438,9 +1472,13 @@ const changeConnection = async (reportName = null) => {
         converted: false,
         metadataBeforeCount: 0,
         metadataAfterCount: 0,
+        refreshSchedule: 'Not configured',
         workflowStatus: 'Not started'
       };
       existing.converted = true;
+      if (report.refreshSchedule) {
+        existing.refreshSchedule = report.refreshSchedule;
+      }
       reportMap.set(reportKey, existing);
     });
 
@@ -1453,6 +1491,7 @@ const changeConnection = async (reportName = null) => {
         converted: false,
         metadataBeforeCount: 0,
         metadataAfterCount: 0,
+        refreshSchedule: 'Not configured',
         workflowStatus: 'Not started'
       };
       const beforeCount = Array.isArray(metadataValue?.before) ? metadataValue.before.length : 0;
@@ -1512,6 +1551,9 @@ const changeConnection = async (reportName = null) => {
 
       const trackerPublishStatus = trackerEntry.publishStatus || 'Not started';
       const trackerRefreshStatus = trackerEntry.refreshStatus || 'Not started';
+      const trackerRefreshSchedule = trackerEntry.refreshSchedule || '';
+      const liveRefreshSchedule = reportRow.refreshSchedule || '';
+      const refreshSchedule = liveRefreshSchedule || trackerRefreshSchedule || 'Not configured';
 
       return {
         ...reportRow,
@@ -1525,7 +1567,8 @@ const changeConnection = async (reportName = null) => {
         comments,
         workflowStatus,
         publishStatus: trackerPublishStatus,
-        refreshStatus: trackerRefreshStatus
+        refreshStatus: trackerRefreshStatus,
+        refreshSchedule
       };
     });
 
@@ -1562,7 +1605,8 @@ const changeConnection = async (reportName = null) => {
           tableCount: Math.max(Number.parseInt(existing.tableCount, 10) || 0, row.tableCount || 0),
           connectionCount: Math.max(Number.parseInt(existing.connectionCount, 10) || 0, row.connectionCount || 0),
           sqlQueryCount: Math.max(Number.parseInt(existing.sqlQueryCount, 10) || 0, row.sqlQueryCount || 0),
-          complexity: row.complexity || existing.complexity || 'Low'
+          complexity: row.complexity || existing.complexity || 'Low',
+          refreshSchedule: row.refreshSchedule || existing.refreshSchedule || 'Not configured'
         };
 
         const hasDelta =
@@ -1571,7 +1615,8 @@ const changeConnection = async (reportName = null) => {
           merged.tableCount !== existing.tableCount ||
           merged.connectionCount !== existing.connectionCount ||
           merged.sqlQueryCount !== existing.sqlQueryCount ||
-          merged.complexity !== existing.complexity;
+          merged.complexity !== existing.complexity ||
+          merged.refreshSchedule !== existing.refreshSchedule;
 
         if (hasDelta) {
           next[key] = merged;
@@ -1738,6 +1783,7 @@ const changeConnection = async (reportName = null) => {
       { Field: 'Publish Message', Value: publishNote || '-' },
       { Field: 'Refresh Status', Value: formatStatusLabel(refreshStatus) },
       { Field: 'Refresh Message', Value: refreshNote || '-' },
+      { Field: 'Refresh Schedules Known', Value: reportStatusRows.filter((row) => (row.refreshSchedule || '').toLowerCase() !== 'not configured').length },
       { Field: 'Reports Published (Success)', Value: publishSuccessCount },
       { Field: 'Reports Refreshed (Success)', Value: refreshSuccessCount }
     ];
@@ -1749,6 +1795,7 @@ const changeConnection = async (reportName = null) => {
       'Connection Changes': row.metadataAfterCount > 0 ? 'Success' : 'Pending',
       'Publish Status': row.publishStatus,
       'Refresh Status': row.refreshStatus,
+      'Refresh Schedule': row.refreshSchedule || 'Not configured',
       Connections: row.connectionCount,
       Tables: row.tableCount,
       'SQL Queries': row.sqlQueryCount,
@@ -1780,6 +1827,7 @@ const changeConnection = async (reportName = null) => {
       'Connection Changes': row.metadataAfterCount > 0 ? 'Success' : 'Pending',
       'Publish Status': row.publishStatus,
       'Refresh Status': row.refreshStatus,
+      'Refresh Schedule': row.refreshSchedule || 'Not configured',
       Connections: row.connectionCount,
       Tables: row.tableCount,
       'SQL Queries': row.sqlQueryCount,
@@ -1805,6 +1853,7 @@ const changeConnection = async (reportName = null) => {
       detailRows.push({ Field: 'Number of SQL Queries', Value: row.sqlQueryCount });
       detailRows.push({ Field: 'Complexity', Value: row.complexity });
       detailRows.push({ Field: 'Validation', Value: row.validationStatus });
+      detailRows.push({ Field: 'Refresh Schedule', Value: row.refreshSchedule || 'Not configured' });
       detailRows.push({ Field: '', Value: '' });
 
       const worksheet = XLSX.utils.json_to_sheet(detailRows, {
@@ -1858,6 +1907,17 @@ const changeConnection = async (reportName = null) => {
   const authConfigured = Boolean(tenantId && clientId && clientSecret);
   const metadataBeforeCount = Array.isArray(metadataBefore) ? metadataBefore.length : 0;
   const metadataAfterCount = Array.isArray(metadataAfter) ? metadataAfter.length : 0;
+
+  const selectedReportRefreshSchedule = React.useMemo(() => {
+    if (!selectedReport) {
+      return '';
+    }
+    const selectedKey = normalizeReportKey(selectedReport);
+    const matchedRow = reportStatusRows.find((row) =>
+      normalizeReportKey(row.reportName || row.displayName) === selectedKey
+    );
+    return matchedRow?.refreshSchedule || '';
+  }, [reportStatusRows, selectedReport]);
 
   const completedSteps = React.useMemo(() => {
     return {
@@ -1963,6 +2023,7 @@ const changeConnection = async (reportName = null) => {
               <th>Tables</th>
               <th>Queries</th>
               <th>Complexity</th>
+              <th>Schedule</th>
               <th>Validation</th>
               <th>Status</th>
             </tr>
@@ -1970,7 +2031,7 @@ const changeConnection = async (reportName = null) => {
           <tbody>
             {reportStatusRows.length === 0 ? (
               <tr>
-                <td colSpan={13} className="report-tracker-empty">
+                <td colSpan={14} className="report-tracker-empty">
                   No reports detected yet. Download or convert reports to populate this tracker.
                 </td>
               </tr>
@@ -2005,6 +2066,7 @@ const changeConnection = async (reportName = null) => {
                     <td className="metric-cell">{row.tableCount}</td>
                     <td className="metric-cell">{row.sqlQueryCount}</td>
                     <td><span className={`complexity-pill ${String(row.complexity || '').toLowerCase().replace(/\s+/g, '-')}`}>{row.complexity}</span></td>
+                    <td>{row.refreshSchedule || 'Not configured'}</td>
                     <td><span className={`validation-pill ${row.validationStatus === 'Validated' ? 'success' : 'warning'}`}>{row.validationStatus}</span></td>
                     <td className="report-tracker-comments">{row.comments}</td>
                   </tr>
@@ -2244,6 +2306,7 @@ const changeConnection = async (reportName = null) => {
               statusMessage={statusMessage}
               statusType={statusType}
               targetTechnology={autoTargetTechnology}
+              reportRefreshSchedule={selectedReportRefreshSchedule}
             />
       )}
 
